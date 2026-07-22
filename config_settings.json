@@ -1,0 +1,8 @@
+{
+    "ble_device_identifier": "Test",
+    "ble_connection_timeout_s": 18,
+    "graph_display_window_sec": 30,
+    "chart_line_thickness": 2,
+    "sqlite_database_directory": "/home/pranitchiman/Projects/barc_dashboard",
+    "system_logs_directory": "/home/pranitchiman/Projects/barc_dashboard/logs"
+}
