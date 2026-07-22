@@ -1,3 +1,6 @@
 customtkinter
 matplotlib
 bleak
+numpy
+scipy
+pyserial

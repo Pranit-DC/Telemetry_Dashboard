@@ -10,19 +10,23 @@ This document explains the complete, step-by-step lifecycle of the applicationâ€
 sequenceDiagram
     participant Main as main.py
     participant App as gui/app.py
+    participant Config as AppConfig
     participant DB as DatabaseManager
     participant CSV as RollingCSVLogger
+    participant Acq as AcquisitionService
     participant UI as DashboardPage
-    participant Sim as TelemetrySimulator
 
     Main->>App: Instantiate TelemetryDashboard()
     activate App
+    App->>Config: Instantiate AppConfig()
     App->>DB: Instantiate DatabaseManager()
     DB-->>App: Open DB connection, create tables
     App->>CSV: Instantiate RollingCSVLogger()
     CSV-->>App: Open today's CSV file
-    App->>UI: Build widgets & Matplotlib canvas
-    App->>Sim: Instantiate TelemetrySimulator()
+    App->>Acq: Instantiate AcquisitionService(db, csv, config)
+    App->>Acq: set_source('simulator')
+    Acq->>App: source initialized
+    App->>UI: Build widgets & BaseChart components
     App-->>Main: Return app instance
     deactivate App
     Main->>Main: app.mainloop() (Start Tkinter event loop)
@@ -32,104 +36,91 @@ sequenceDiagram
    * You run `python main.py`. 
    * `main()` instantiates the main application class `TelemetryDashboard()`.
 2. **Backend Setup (`gui/app.py`)**:
-   * The app initializes the **DatabaseManager** ([core/database/manager.py](file:///home/pranitchiman/Projects/barc_dashboard/core/database/manager.py)), which opens a persistent database connection and creates tables (`telemetry_sessions`, `pulse_telemetry`, `system_settings`, `system_events`) if they do not exist.
-   * It initializes the **RollingCSVLogger** ([core/telemetry/csv_logger.py](file:///home/pranitchiman/Projects/barc_dashboard/core/telemetry/csv_logger.py)), opening or creating today's file (`telemetry_daily_YYYY-MM-DD.csv`).
-   * It instantiates the `data_lock` thread mutex and empty shared lists (`time_data`, `channels_data`, `all_history`).
-   * It queries SQLite for user settings (e.g., normalisation state, channel visibility, selected channel).
+   * Initializes `AppConfig` to load settings from JSON.
+   * Initializes the **DatabaseManager** ([core/database/manager.py]), creating the connection and tables (`sessions`, `trace_bursts`, `system_events`).
+   * Initializes the **RollingCSVLogger** for daily backups.
+   * Initializes the **AcquisitionService** which orchestrates the data sources and connects to the default source (Simulator).
 3. **UI Construction**:
-   * **Sidebar** ([gui/components/sidebar.py](file:///home/pranitchiman/Projects/barc_dashboard/gui/components/sidebar.py)) is built with controls and callbacks.
-   * **DashboardPage** ([gui/dashboard/page.py](file:///home/pranitchiman/Projects/barc_dashboard/gui/dashboard/page.py)) is built, embedding the Matplotlib canvas widget (`BaseChart`) and rendering blank lines for the channels.
+   * **Sidebar** is built with controls and callbacks.
+   * **DashboardPage** is built, embedding two `BaseChart` widgets (Decay Trace Chart and Trend Chart) and the metric cards.
 4. **Daemon Setup**:
-   * It creates the `TelemetrySimulator` instance and binds callbacks to the GUI main thread.
-   * The application starts Tkinter's `app.mainloop()` event loop, resting idle until user interaction occurs.
+   * `app.py` starts a periodic Tkinter timer (`_start_polling()`) to poll the `AcquisitionService` queue every 100ms.
 
 ---
 
-## Phase 2: Live Data Simulation & Logging
+## Phase 2: Live Data Acquisition & Logging
 
-When the user clicks the **Start Simulation** button:
+When the user clicks the **Start Acquisition** button:
 
 ```mermaid
 sequenceDiagram
-    participant MainThread as Main GUI Thread
-    participant SimThread as Background Sim Thread
-    participant Lock as self.data_lock
+    participant UI as Main GUI Thread
+    participant Acq as AcquisitionService
+    participant Src as DataSource (Background Thread)
+    participant Q as queue.Queue
     participant DB as DatabaseManager
     participant CSV as RollingCSVLogger
 
-    MainThread->>SimThread: simulator.start() (creates thread)
-    activate SimThread
-    loop Every 1 Second
-        SimThread->>SimThread: Simulate sensor readings
-        SimThread->>Lock: Acquire Lock
-        SimThread->>Lock: Append values to shared arrays
-        SimThread->>Lock: Release Lock
-        SimThread->>DB: insert_frame() (write queue)
-        Note over DB: Commits to SQLite on every 10 frames
-        SimThread->>CSV: log_packet() (every 10 frames)
-        SimThread->>MainThread: root.after(0, refresh_dashboard)
+    UI->>Acq: start_session()
+    Acq->>DB: create_session()
+    Acq->>Src: start()
+    activate Src
+    
+    loop Background Thread
+        Src->>Src: Read from hardware / Generate burst
+        Src->>Q: put(TraceBurst)
     end
-    deactivate SimThread
+    
+    loop Every 100ms (Main Thread)
+        UI->>Acq: poll_queue()
+        Acq->>Q: get_nowait()
+        Acq->>DB: insert_burst()
+        Acq->>CSV: log_burst()
+        Acq-->>UI: return list[TraceBurst]
+        UI->>UI: Update Charts & Cards
+    end
+    deactivate Src
 ```
 
 1. **Triggering the Stream**:
    * Clicking start calls `_on_start()` in `app.py`.
-   * It records metadata (session ID, time) in SQLite.
-   * It starts the `TelemetrySimulator._run_loop()` in a separate background thread.
-2. **Background Thread Loop**:
-   * **Simulates ADC Readings**: Reads pseudo-random pulses (mimicking hardware sensor pulses).
-   * **Thread Synchronization**: The thread locks access to data lists using `with self.data_lock:`, appends values, and immediately releases the lock.
-   * **Database Insert**: Queues the reading into `DatabaseManager`. Every 10 frames, it flushes the queue in a single SQLite transaction write.
-   * **CSV Backup**: Every 10 frames, it appends data rows to the rolling CSV file.
-   * **UI Callback**: Calls `self.schedule(0, self.refresh)` which schedules the GUI redraw to run on the main thread via `root.after()`.
+   * `AcquisitionService` creates a new session in SQLite and calls `start()` on the active `DataSource` (Simulator, Serial, or BLE).
+   * For Serial/BLE, a `"START\n"` command is sent to the Arduino.
+2. **Background Thread Loop (`DataSource`)**:
+   * Hardware or Simulator produces data.
+   * `TraceParser` translates text lines into `TraceBurst` objects.
+   * `TraceBurst` objects are placed into a thread-safe `queue.Queue`.
+3. **Polling & Storage (Main Thread)**:
+   * The 100ms UI timer calls `AcquisitionService.poll_queue()`.
+   * For each burst, it is inserted into the SQLite database and logged to the CSV file.
+4. **GUI Callback**:
+   * The dashboard graph renderer updates the decay trace chart with the new points and appends the metrics to the trend chart.
 
 ---
 
-## Phase 3: GUI Redraw & Analytics Update
+## Phase 3: Session Finalization & Playback
 
-Scheduled by the simulation thread, the main thread runs the GUI update cycle:
+When the user clicks the **Stop** button or loads a historical session:
 
-1. **Acquiring Data Lock**:
-   * `GraphRenderer.refresh()` runs on the GUI thread.
-   * It locks `self.data_lock` to safely make local copies of `time_data` and `channels_data`. This ensures it doesn't read half-written data if the background thread fires at the exact same instant.
-2. **Plot Redraw**:
-   * Updates coordinates of the Matplotlib lines (`set_data()`).
-   * Adjusts the X-axis limit: if live view is on, it auto-scrolls the graph to show the last $N$ seconds of data. If the user is panning/zooming, scrolling pauses.
-   * Calls Matplotlib's `canvas.draw_idle()` to redraw the plot without blocking.
-3. **Analytics Calculation**:
-   * Calls signal processing routines in [core/analysis/signal.py](file:///home/pranitchiman/Projects/barc_dashboard/core/analysis/signal.py) for the selected channel (e.g. estimating frequency, peak-to-peak amplitude, rise time, and max jitter).
-   * Updates the value labels on the top custom cards.
+1. **Stop & Finalize**:
+   * `app.py` calls `AcquisitionService.stop_session()`.
+   * A `"STOP\n"` command is sent to the hardware.
+   * The background thread halts. The session status is updated to 'completed' in SQLite.
+2. **Session Loading**:
+   * `DatabaseManager.get_session_bursts(session_id)` queries SQLite to retrieve all `TraceBurst` objects and their serialized JSON data.
+3. **Replay Rendering**:
+   * The `GraphRenderer` redraws the metric trend chart with all historical bursts, and sets the decay trace chart to the last burst of the session.
 
 ---
 
-## Phase 4: Session Loading & Replay
-
-When a user double-clicks a session in the Session Manager, or chooses a run in the sidebar dropdown:
-
-1. **Stop & Reset**:
-   * Any active simulation is stopped and database buffers are flushed.
-   * Current graphical lines are cleared, and active memory data lists are emptied.
-2. **Querying Database**:
-   * `DatabaseManager.get_session_data()` queries SQLite:
-     ```sql
-     SELECT elapsed_seconds, ch1_voltage, ch2_voltage, ch3_voltage 
-     FROM pulse_telemetry WHERE session_id = ? ORDER BY elapsed_seconds ASC;
-     ```
-3. **Populating & Drawing**:
-   * The app acquires the thread lock and populates its memory lists with the records loaded from SQLite.
-   * The `GraphRenderer` redraws the entire session timeline, and the analytics cards calculate and display metrics for that historical session.
-
----
-
-## Phase 5: Safe Application Exit
+## Phase 4: Safe Application Exit
 
 When the user clicks the close ('X') window button:
 
 1. **Intercepting Exit**:
-   * The window intercept protocol `app.protocol("WM_DELETE_WINDOW", on_close)` calls `on_close(app)` in `main.py`.
+   * The window intercept protocol calls `on_close(app)` in `main.py`.
 2. **Resource Cleanup (`app.cleanup()`)**:
-   * **Telemetry Stop**: Signals the background simulator thread loop to exit safely.
-   * **Database Flush**: Flushes any final queued frames left in the database memory buffer to SQLite.
+   * **Acquisition Stop**: Signals the active `DataSource` to stop and disconnect.
    * **CSV Closing**: Closes the file handles for the rolling CSV logger.
    * **Database Close**: Closes the persistent SQLite connection cleanly, ensuring no database corruption.
 3. **App Destroy**:

@@ -1,61 +1,40 @@
-# Analytics window with tabbed layout.
-# Each tab gets access to the database and live data references
-# so they can build charts and tables from real data.
-
 import customtkinter as ctk
+
 from .overview import OverviewTab
-from .statistics import StatisticsTab
 from .signal import SignalAnalysisTab
+from .statistics import StatisticsTab
 from .reports import ReportsTab
 
-
 class AnalyticsWindow(ctk.CTkToplevel):
-    """Tabbed analytics window for detailed signal analysis."""
-
-    def __init__(self, db, time_data, channels_data):
+    """
+    Advanced Analytics Window.
+    """
+    def __init__(self, db, burst_history):
         super().__init__()
-
-        # Store data references so tabs can access them
+        self.title("Data Analytics & Post-Processing")
+        self.geometry("1000x700")
+        self.minsize(800, 600)
+        
         self.db = db
-        self.time_data = time_data
-        self.channels_data = channels_data
-
-        self.title("Analytics Suite")
-        self.geometry("1200x800")
-        self.minsize(1000, 700)
-        self.lift()
-
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-
-        main_frame = ctk.CTkFrame(self, corner_radius=0)
-        main_frame.grid(row=0, column=0, sticky="nsew")
-        main_frame.grid_rowconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(0, weight=1)
-
-        self.tabview = ctk.CTkTabview(main_frame)
-        self.tabview.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-
-        # Create the tab containers
-        overview_tab = self.tabview.add("Overview")
-        statistics_tab = self.tabview.add("Statistics")
-        signal_tab = self.tabview.add("Signal Analysis")
-        report_tab = self.tabview.add("Reports")
-
-        # Configure tabs to expand their content
-        for tab in [overview_tab, statistics_tab, signal_tab, report_tab]:
-            tab.grid_rowconfigure(0, weight=1)
-            tab.grid_columnconfigure(0, weight=1)
-
-        # Mount modular tab views — each receives db and data references
-        self.overview_view = OverviewTab(overview_tab, db, time_data, channels_data)
-        self.overview_view.grid(row=0, column=0, sticky="nsew", padx=20, pady=5)
-
-        self.statistics_view = StatisticsTab(statistics_tab, db, time_data, channels_data)
-        self.statistics_view.grid(row=0, column=0, sticky="nsew", padx=20, pady=5)
-
-        self.signal_view = SignalAnalysisTab(signal_tab, db, time_data, channels_data)
-        self.signal_view.grid(row=0, column=0, sticky="nsew", padx=20, pady=5)
-
-        self.report_view = ReportsTab(report_tab, db, time_data, channels_data)
-        self.report_view.grid(row=0, column=0, sticky="nsew", padx=20, pady=5)
+        self.burst_history = burst_history
+        
+        # Build UI
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        self.tab_overview = self.tabview.add("Overview")
+        self.tab_signal = self.tabview.add("Signal Analysis")
+        self.tab_stats = self.tabview.add("Statistics")
+        self.tab_reports = self.tabview.add("Reports")
+        
+        self.overview_view = OverviewTab(self.tab_overview, self.db, self.burst_history)
+        self.overview_view.pack(fill="both", expand=True)
+        
+        self.signal_view = SignalAnalysisTab(self.tab_signal, self.db, self.burst_history)
+        self.signal_view.pack(fill="both", expand=True)
+        
+        self.stats_view = StatisticsTab(self.tab_stats, self.db, self.burst_history)
+        self.stats_view.pack(fill="both", expand=True)
+        
+        self.reports_view = ReportsTab(self.tab_reports, self.db, self.burst_history)
+        self.reports_view.pack(fill="both", expand=True)

@@ -1,156 +1,60 @@
-# Graph rendering logic for the telemetry dashboard.
-# Handles updating matplotlib plot lines, axis limits, and analytics cards.
-# Separated from the main window so the UI code stays clean.
-
-import config
-from core.analysis import signal as analytics
-
-
 class GraphRenderer:
-    """Updates the matplotlib chart and analytics metric cards.
-
-    This is the bridge between raw data and what the user sees on screen.
-    It reads from the data lists and writes to the matplotlib/tkinter widgets.
     """
-
+    Handles plotting updates for the dashboard charts.
+    """
     def __init__(self, dashboard_page):
-        # The dashboard page has all the matplotlib objects we need:
-        # self.page.ax, self.page.canvas, self.page.plot_lines,
-        # self.page.toolbar, self.page.cards, self.page.lbl_loss, etc.
         self.page = dashboard_page
-
-    def refresh(self, time_data, channels_data, active_channels,
-                normalize_graph, target_channel, expected_pkts, received_pkts):
-        """Full dashboard refresh: update graph lines, axes, and analytics cards.
-
-        Called after every new data packet arrives, or when the user toggles
-        a setting like channel visibility or normalization.
-        """
-        # Update the dropped frames and battery indicators
-        self.page.lbl_loss.configure(
-            text=f"Dropped Frames: {expected_pkts - received_pkts}"
-        )
-        battery = max(12, 100 - int(expected_pkts / 30))
-        self.page.lbl_battery.configure(
-            text=f"Battery: {battery}%",
-            text_color="#2EA44F" if battery > 25 else "#D73A49",
-        )
-
-        if not time_data:
-            return
-
-        times = list(time_data)
-
-        # Update each channel's plot line with current data
-        for ch in config.AVAILABLE_CHANNELS:
-            if not active_channels.get(ch, True):
-                continue
-            volts = list(channels_data[ch])
-            n = min(len(times), len(volts))
-            plot_values = volts[:n]
-            if normalize_graph:
-                plot_values = analytics.normalize(plot_values)
-            self.page.plot_lines[ch].set_data(times[:n], plot_values)
-
-        # Auto-scroll the X-axis to follow new data (unless user is panning)
-        is_panning = False
-        if hasattr(self.page, "toolbar"):
-            is_panning = self.page.toolbar.mode.name != "NONE"
-
-        if not is_panning:
-            window = config.GRAPH_DISPLAY_WINDOW_SEC
-            latest = times[-1]
-            if latest > window:
-                self.page.ax.set_xlim(latest - window, latest)
-            else:
-                self.page.ax.set_xlim(0, window)
-
-        # Set Y-axis limits based on normalization mode
-        if normalize_graph:
-            self.page.ax.set_ylim(0.0, 1.0)
-        else:
-            self._auto_scale_y(channels_data, active_channels)
-
-        self.page.canvas.draw_idle()
-
-        # Update the analytics metric cards
-        self._update_cards(times, channels_data, target_channel)
-
-    def update_visibility(self, time_data, channels_data, active_channels, normalize_graph):
-        """Called when the user toggles a channel's visibility checkbox.
-
-        Re-populates the line data for visible channels and hides invisible ones.
-        """
-        times = list(time_data) if time_data else []
-
-        for ch in config.AVAILABLE_CHANNELS:
-            is_visible = active_channels.get(ch, True)
-
-            if is_visible and times:
-                volts = list(channels_data[ch])
-                n = min(len(times), len(volts))
-                plot_values = volts[:n]
-                if normalize_graph:
-                    plot_values = analytics.normalize(plot_values)
-                self.page.plot_lines[ch].set_data(times[:n], plot_values)
-
-            self.page.plot_lines[ch].set_visible(is_visible)
-
-        self.page.ax.relim()
-        self.page.ax.autoscale_view(scalex=False, scaley=True)
-        self.page.canvas.draw_idle()
-
-    def _auto_scale_y(self, channels_data, active_channels):
-        """Calculate Y-axis bounds from the visible channel data with 5% padding."""
-        y_min, y_max = None, None
-        for ch in config.AVAILABLE_CHANNELS:
-            if not active_channels.get(ch, True):
-                continue
-            values = list(channels_data[ch])
-            if not values:
-                continue
-            ch_min, ch_max = min(values), max(values)
-            y_min = ch_min if y_min is None else min(y_min, ch_min)
-            y_max = ch_max if y_max is None else max(y_max, ch_max)
-
-        if y_min is not None and y_max is not None:
-            padding = 0.1 if y_min == y_max else (y_max - y_min) * 0.05
-            self.page.ax.set_ylim(y_min - padding, y_max + padding)
-
-    def _update_cards(self, times, channels_data, target_channel):
-        """Compute and display analytics for the selected target channel."""
-        v_data = list(channels_data[target_channel])
-        if not v_data:
-            return
-
+        self.locked_burst = None
+    
+    def refresh(self, latest_burst, burst_history):
+        """Update both charts and metric cards."""
+        if latest_burst:
+            display_burst = self.locked_burst if self.locked_burst else latest_burst
+            self._update_trace_chart(display_burst)
+            self._update_metric_cards(display_burst, burst_history)
+        if burst_history:
+            self._update_trend_chart(burst_history)
+        self._update_diagnostics(burst_history)
+    
+    def _update_trace_chart(self, burst):
+        """Plot the decay trace: voltage vs relative sample number."""
+        indices = list(range(len(burst.trace_points)))
+        voltages = [p.voltage for p in burst.trace_points]
+        self.page.trace_line.set_data(indices, voltages)
+        if self.page.ax_trace.get_autoscalex_on() and self.page.ax_trace.get_autoscaley_on():
+            self.page.ax_trace.relim()
+            self.page.ax_trace.autoscale_view()
+        self.page.canvas_trace.draw_idle()
+    
+    def _update_trend_chart(self, burst_history):
+        """Plot fall time trend over burst index (rolling window of 20)."""
+        window_size = 20
+        start_idx = max(0, len(burst_history) - window_size)
+        display_history = burst_history[start_idx:]
+        
+        indices = list(range(start_idx, len(burst_history)))
+        fall_times = [b.fall_time_us for b in display_history]
+        self.page.trend_line.set_data(indices, fall_times)
+        if self.page.ax_trend.get_autoscalex_on() and self.page.ax_trend.get_autoscaley_on():
+            self.page.ax_trend.relim()
+            self.page.ax_trend.autoscale_view()
+        self.page.canvas_trend.draw_idle()
+    
+    def _update_metric_cards(self, burst, history):
+        """Update the metric card values on the page."""
         cards = self.page.cards
-
-        # Peak-to-peak voltage
-        pp = analytics.peak_to_peak(v_data)
-        cards["Peak-to-Peak"]["value"].configure(text=f"{pp:.2f} V")
-
-        # Signal frequency estimate
-        freq = analytics.estimate_frequency(times, v_data)
-        if freq is not None:
-            cards["Frequency"]["value"].configure(text=f"{freq:.1f} Hz")
-        else:
-            cards["Frequency"]["value"].configure(text="--")
-
-        # Time at which peak voltage occurred
-        pt = analytics.find_peak_time(times, v_data)
-        cards["Peak Time"]["value"].configure(text=f"{pt:.2f} s")
-
-        # Rise time (10% to 90% of range)
-        rt = analytics.rise_time(times, v_data)
-        if rt is not None:
-            cards["Rise Time"]["value"].configure(text=f"{rt:.2f} s")
-        else:
-            cards["Rise Time"]["value"].configure(text="--")
-
-        # Maximum inter-channel jitter
-        jitter = analytics.max_jitter(
-            times, channels_data, target_channel, config.AVAILABLE_CHANNELS
-        )
-        cards["Max Jitter (Δt)"]["value"].configure(
-            text=f"{jitter:.1f} ms" if jitter > 0 else "0.0 ms"
-        )
+        cards['Peak Voltage']['value'].configure(text=f'{burst.peak_voltage:.3f} V')
+        cards['Fall Time']['value'].configure(text=f'{burst.fall_time_us:.1f} μs')
+        cards['Avg Fall Time']['value'].configure(text=f'{burst.avg_fall_time_us:.1f} μs')
+        cards['Burst Count']['value'].configure(text=str(len(history)))
+    
+    def _update_diagnostics(self, history):
+        """Update diagnostic text."""
+        self.page.lbl_burst_count.configure(text=f'Burst Count: {len(history)}')
+    
+    def clear(self):
+        """Clear the charts."""
+        self.page.trace_line.set_data([], [])
+        self.page.trend_line.set_data([], [])
+        self.page.canvas_trace.draw_idle()
+        self.page.canvas_trend.draw_idle()

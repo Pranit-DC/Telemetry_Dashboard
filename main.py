@@ -1,23 +1,20 @@
-# Application entry point.
-# Creates the main dashboard window and starts the event loop.
-
-import sys
+import customtkinter as ctk
 from gui.app import TelemetryDashboard
 
-
 def main():
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    
     app = TelemetryDashboard()
-    app.protocol("WM_DELETE_WINDOW", lambda: on_close(app))
+    
+    def on_close():
+        try:
+            app.cleanup()
+        finally:
+            app.destroy()
+    
+    app.protocol("WM_DELETE_WINDOW", on_close)
     app.mainloop()
-
-
-def on_close(app):
-    """Clean up resources and exit when the window is closed."""
-    print("[System] Closing application safely...")
-    app.cleanup()
-    app.destroy()
-    sys.exit(0)
-
 
 if __name__ == "__main__":
     main()

@@ -1,118 +1,110 @@
-# Signal analysis functions for telemetry data.
-# Every function here is pure math: takes numbers in, returns numbers out.
-# No GUI code, no database calls, no file I/O.
+import numpy as np
+from typing import List, Dict
+from models.telemetry import TracePoint, TraceBurst
 
-
-def peak_to_peak(values):
-    """Difference between the highest and lowest voltage in the dataset."""
-    if len(values) < 2:
+def compute_peak_voltage(trace_points: List[TracePoint]) -> float:
+    """Returns the maximum voltage from a list of trace points."""
+    if not trace_points:
         return 0.0
-    return max(values) - min(values)
+    return max(pt.voltage for pt in trace_points)
 
-
-def estimate_frequency(time_data, voltage_data):
-    """Estimate signal frequency using the zero-crossing method.
-
-    We count how many times the signal crosses upward through its midpoint,
-    then use the average time between crossings as the period.
-
-    Returns frequency in Hz, or None if there aren't enough crossings.
-    """
-    if len(voltage_data) < 2:
-        return None
-
-    v_max = max(voltage_data)
-    v_min = min(voltage_data)
-    midpoint = (v_max + v_min) / 2
-
-    # Find the times where voltage crosses upward through the midpoint
-    n = min(len(time_data), len(voltage_data))
-    crossings = [
-        time_data[i]
-        for i in range(1, n)
-        if voltage_data[i - 1] < midpoint <= voltage_data[i]
-    ]
-
-    if len(crossings) < 2:
-        return None
-
-    # Average period = average gap between consecutive crossings
-    periods = [crossings[i] - crossings[i - 1] for i in range(1, len(crossings))]
-    avg_period = sum(periods) / len(periods)
-
-    return (1.0 / avg_period) if avg_period > 0 else None
-
-
-def find_peak_time(time_data, voltage_data):
-    """Return the elapsed time at which the maximum voltage occurred."""
-    if not voltage_data:
+def compute_fall_time(trace_points: List[TracePoint]) -> float:
+    """Computes the 90%-to-10% fall time in microseconds."""
+    if not trace_points:
         return 0.0
-    peak_idx = voltage_data.index(max(voltage_data))
-    return time_data[peak_idx] if peak_idx < len(time_data) else 0.0
-
-
-def rise_time(time_data, voltage_data):
-    """Time for the signal to travel from 10% to 90% of its peak-to-peak range.
-
-    This measures how fast the signal responds to a change.
-    Returns seconds, or None if it can't be calculated.
-    """
-    if len(voltage_data) < 2:
-        return None
-
-    v_min = min(voltage_data)
-    v_pp = max(voltage_data) - v_min
-    if v_pp <= 0:
-        return None
-
-    threshold_10 = v_min + 0.1 * v_pp
-    threshold_90 = v_min + 0.9 * v_pp
-
-    # Find the first time the signal passes each threshold
-    t_10 = next((t for t, v in zip(time_data, voltage_data) if v >= threshold_10), None)
-    t_90 = next((t for t, v in zip(time_data, voltage_data) if v >= threshold_90), None)
-
-    if t_10 is not None and t_90 is not None and t_90 > t_10:
-        return t_90 - t_10
-    return None
-
-
-def max_jitter(time_data, channels_data, target_channel, all_channels):
-    """Largest timing offset between the target channel's peak and other channels' peaks.
-
-    Jitter tells us how synchronized the channels are. If Channel 1 peaks
-    at t=5.0s and Channel 2 peaks at t=5.3s, the jitter is 300ms.
-    Returns jitter in milliseconds.
-    """
-    target_data = list(channels_data[target_channel])
-    if not target_data or len(target_data) != len(time_data):
+        
+    peak_voltage = compute_peak_voltage(trace_points)
+    # Find peak index
+    peak_idx = 0
+    for i, pt in enumerate(trace_points):
+        if pt.voltage == peak_voltage:
+            peak_idx = i
+            break
+            
+    # Look only at the decay portion
+    decay_points = trace_points[peak_idx:]
+    if not decay_points:
         return 0.0
+        
+    v90 = peak_voltage * 0.9
+    v10 = peak_voltage * 0.1
+    
+    t90 = None
+    t10 = None
+    
+    # Simple linear interpolation or just nearest for now
+    # We find the first time it drops below the threshold
+    for pt in decay_points:
+        if t90 is None and pt.voltage <= v90:
+            t90 = pt.time_us
+        if t10 is None and pt.voltage <= v10:
+            t10 = pt.time_us
+            
+    if t90 is not None and t10 is not None:
+        return max(0.0, t10 - t90)
+    return 0.0
 
-    target_peak_t = time_data[target_data.index(max(target_data))]
-    worst_jitter = 0.0
+def compute_decay_constant(trace_points: List[TracePoint]) -> float:
+    """Performs log-linear regression on the decay portion to find tau."""
+    if not trace_points or len(trace_points) < 3:
+        return 0.0
+        
+    peak_voltage = compute_peak_voltage(trace_points)
+    
+    peak_idx = 0
+    for i, pt in enumerate(trace_points):
+        if pt.voltage == peak_voltage:
+            peak_idx = i
+            break
+            
+    decay_points = trace_points[peak_idx:]
+    if len(decay_points) < 3:
+        return 0.0
+        
+    # v(t) = v0 * exp(-t/tau) => ln(v(t)) = ln(v0) - t/tau
+    t_vals = np.array([pt.time_us for pt in decay_points])
+    # shift time to 0 at peak
+    t_vals = t_vals - t_vals[0]
+    
+    v_vals = np.array([max(pt.voltage, 1e-6) for pt in decay_points]) # avoid log(0)
+    ln_v = np.log(v_vals)
+    
+    # Fit line: ln_v = m*t + c
+    # m = -1/tau => tau = -1/m
+    coeffs = np.polyfit(t_vals, ln_v, 1)
+    m = coeffs[0]
+    
+    if m >= 0:
+        return 0.0 # Did not decay properly
+        
+    tau = -1.0 / m
+    return float(tau)
 
-    for ch in all_channels:
-        if ch == target_channel:
-            continue
-        ch_data = list(channels_data[ch])
-        if ch_data and len(ch_data) == len(time_data):
-            ch_peak_t = time_data[ch_data.index(max(ch_data))]
-            jitter_ms = abs(target_peak_t - ch_peak_t) * 1000.0
-            worst_jitter = max(worst_jitter, jitter_ms)
+def compute_session_statistics(bursts: List[TraceBurst]) -> Dict[str, float]:
+    """Computes mean, std, min, max for fall time and peak voltage across bursts."""
+    if not bursts:
+        return {}
+        
+    fall_times = [b.fall_time_us for b in bursts]
+    peaks = [b.peak_voltage for b in bursts]
+    
+    return {
+        'fall_time_mean': float(np.mean(fall_times)),
+        'fall_time_std': float(np.std(fall_times)),
+        'fall_time_min': float(np.min(fall_times)),
+        'fall_time_max': float(np.max(fall_times)),
+        'peak_mean': float(np.mean(peaks)),
+        'peak_std': float(np.std(peaks)),
+        'peak_min': float(np.min(peaks)),
+        'peak_max': float(np.max(peaks))
+    }
 
-    return worst_jitter
-
-
-def normalize(values):
-    """Scale values to a 0-1 range using min-max normalization.
-
-    Useful for comparing channels with different amplitude ranges
-    on the same graph scale.
-    """
-    if len(values) < 2:
-        return values
-    v_min = min(values)
-    v_max = max(values)
-    if v_max == v_min:
-        return [0.0] * len(values)
-    return [(v - v_min) / (v_max - v_min) for v in values]
+def normalize(values: List[float]) -> List[float]:
+    """Min-max normalizes a list of values to [0, 1]."""
+    if not values:
+        return []
+    min_val = min(values)
+    max_val = max(values)
+    if max_val == min_val:
+        return [0.0 for _ in values]
+    return [(v - min_val) / (max_val - min_val) for v in values]
