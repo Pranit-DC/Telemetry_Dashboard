@@ -26,7 +26,7 @@ class DashboardPage(ctk.CTkFrame):
         self.frame_top = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 5))
         
-        metrics = ["Peak Voltage", "Fall Time", "Avg Fall Time", "Burst Count", "Source Status"]
+        metrics = ["Peak Voltage", "Fall Time", "Avg Fall Time", "Std Dev (σ)", "Min / Max Fall"]
         
         # Equal width columns for metrics
         for i in range(len(metrics)):
@@ -61,7 +61,7 @@ class DashboardPage(ctk.CTkFrame):
         self.chart_trace = BaseChart(
             self.frame_charts,
             title="Decay Trace (Latest Capture)",
-            x_label="Sample Index",
+            x_label="Time (μs)",
             y_label="Voltage (V)",
         )
         self.chart_trace.grid(row=0, column=0, sticky="nsew")
@@ -139,6 +139,5 @@ class DashboardPage(ctk.CTkFrame):
         self.txt_log.configure(state="disabled")
         
     def update_source_status(self, status):
-        """Update Source Status metric and Diagnostics label."""
-        self.cards['Source Status']['value'].configure(text=status)
+        """Update the diagnostics source label."""
         self.lbl_source.configure(text=f"Source: {status}")

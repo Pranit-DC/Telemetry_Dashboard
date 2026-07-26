@@ -1,3 +1,5 @@
+import numpy as np
+
 class GraphRenderer:
     """
     Handles plotting updates for the dashboard charts.
@@ -17,13 +19,24 @@ class GraphRenderer:
         self._update_diagnostics(burst_history)
     
     def _update_trace_chart(self, burst):
-        """Plot the decay trace: voltage vs relative sample number."""
-        indices = list(range(len(burst.trace_points)))
+        """Plot the decay trace: voltage vs time (us) with smart default zoom."""
+        if not burst.trace_points:
+            return
+            
+        times = [p.time_us for p in burst.trace_points]
         voltages = [p.voltage for p in burst.trace_points]
-        self.page.trace_line.set_data(indices, voltages)
-        if self.page.ax_trace.get_autoscalex_on() and self.page.ax_trace.get_autoscaley_on():
-            self.page.ax_trace.relim()
-            self.page.ax_trace.autoscale_view()
+        self.page.trace_line.set_data(times, voltages)
+        
+        # Smart Default Zoom: Focus on 900us region starting 40us before peak drop
+        peak_idx = max(range(len(burst.trace_points)), key=lambda i: burst.trace_points[i].voltage)
+        peak_time = times[peak_idx]
+        
+        min_x = max(times[0], peak_time - 40.0)
+        max_x = min(times[-1], peak_time + 860.0)
+        
+        self.page.ax_trace.set_xlim(min_x, max_x)
+        self.page.ax_trace.relim()
+        self.page.ax_trace.autoscale_view(scalex=False, scaley=True)
         self.page.canvas_trace.draw_idle()
     
     def _update_trend_chart(self, burst_history):
@@ -46,7 +59,17 @@ class GraphRenderer:
         cards['Peak Voltage']['value'].configure(text=f'{burst.peak_voltage:.3f} V')
         cards['Fall Time']['value'].configure(text=f'{burst.fall_time_us:.1f} μs')
         cards['Avg Fall Time']['value'].configure(text=f'{burst.avg_fall_time_us:.1f} μs')
-        cards['Burst Count']['value'].configure(text=str(len(history)))
+        
+        valid_falls = [b.fall_time_us for b in history if b.fall_time_us > 0]
+        if valid_falls:
+            std_dev = float(np.std(valid_falls))
+            min_f = min(valid_falls)
+            max_f = max(valid_falls)
+            cards['Std Dev (σ)']['value'].configure(text=f'±{std_dev:.1f} μs')
+            cards['Min / Max Fall']['value'].configure(text=f'{min_f:.1f} / {max_f:.1f} μs')
+        else:
+            cards['Std Dev (σ)']['value'].configure(text='--')
+            cards['Min / Max Fall']['value'].configure(text='--')
     
     def _update_diagnostics(self, history):
         """Update diagnostic text."""

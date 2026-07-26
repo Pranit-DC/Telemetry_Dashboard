@@ -138,7 +138,6 @@ void drawTxModeButton() {
     tft.setCursor(txBtnX + 70, txBtnY + 22);
     tft.print("REMOTE MODE:");
     tft.setCursor(txBtnX + 30, txBtnY + 44);
-    
     if (bleInitialized && BLE.central() && BLE.central().connected()) {
       tft.print("BLE UART (CONNECTED)");
     } else {
@@ -549,7 +548,7 @@ void loop() {
               
               // ROUTE A: REMOTE TRANSMISSION OVER NATIVE USB SERIAL ONLY
               if (currentRoute == ROUTE_REMOTE_USB) {
-                Serial.println("\n---BEGIN TRACE DATA---");
+                Serial.println("<<BEG>>");
                 Serial.println("Sample_Index,Time_us,Voltage_V");
 
                 for (int i = regStartIdx; i <= regEndIdx; i++) {
@@ -562,7 +561,7 @@ void loop() {
                     Serial.println(sampleVoltage, 4);
                   }
                 }
-                Serial.println("---END TRACE DATA---");
+                Serial.println("<<END>>");
                 Serial.print("---METRICS---\n");
                 Serial.print("peak_voltage=");
                 Serial.print(peakStartVoltage, 4);
@@ -580,37 +579,38 @@ void loop() {
               // ROUTE B: REMOTE TRANSMISSION SEGMENTED OVER BLUETOOTH BLE UART
               else if (currentRoute == ROUTE_REMOTE_BLE && bleInitialized && BLE.central() && BLE.central().connected()) {
                 char bleTxBuffer[45];
-                
-                txCharacteristic.writeValue("\n---BEGIN TRACE DATA---\n");
-                txCharacteristic.writeValue("Sample_Index,Time_us,Voltage_V\n");
+                  
+                  txCharacteristic.writeValue("<<BEG>>\n");
+                  txCharacteristic.writeValue("Sample_Index,Time_us,Voltage_V\n");
 
-                for (int i = regStartIdx; i <= regEndIdx; i++) {
-                  if (i < TARGET_SAMPLES) {
-                    float sampleTimeUs = (i - regStartIdx) * US_PER_SAMPLE;
-                    float sampleVoltage = capturedVoltages[i];
-                    
-                    int msgLength = snprintf(bleTxBuffer, sizeof(bleTxBuffer), "%d,%.1f,%.4f\n", i, sampleTimeUs, sampleVoltage);
-                    
-                    int bytesSent = 0;
-                    while (bytesSent < msgLength) {
-                      int chunkSize = min(20, msgLength - bytesSent);
-                      txCharacteristic.writeValue((uint8_t*)&bleTxBuffer[bytesSent], chunkSize);
-                      bytesSent += chunkSize;
-                      delayMicroseconds(500); 
+                  for (int i = regStartIdx; i <= regEndIdx; i++) {
+                    if (i < TARGET_SAMPLES) {
+                      float sampleTimeUs = (i - regStartIdx) * US_PER_SAMPLE;
+                      float sampleVoltage = capturedVoltages[i];
+                      
+                      int msgLength = snprintf(bleTxBuffer, sizeof(bleTxBuffer), "%d,%.1f,%.4f\n", i, sampleTimeUs, sampleVoltage);
+                      
+                      int bytesSent = 0;
+                      while (bytesSent < msgLength) {
+                        int chunkSize = min(20, msgLength - bytesSent);
+                        txCharacteristic.writeValue((uint8_t*)&bleTxBuffer[bytesSent], chunkSize);
+                        bytesSent += chunkSize;
+                        delayMicroseconds(500); 
+                      }
                     }
                   }
-                }
-                txCharacteristic.writeValue("---END TRACE DATA---\n");
-                char metricsBuf[80];
-                snprintf(metricsBuf, sizeof(metricsBuf), "---METRICS---\npeak_voltage=%.4f,fall_time_us=%.2f,avg_fall_time_us=%.2f\n",
-                  peakStartVoltage, fallTimeRegUs, storedBatchAvg10 > 0.0 ? storedBatchAvg10 : fallTimeRegUs);
-                int mLen = strlen(metricsBuf);
-                int mSent = 0;
-                while (mSent < mLen) {
-                  int chunkSize = min(20, mLen - mSent);
-                  txCharacteristic.writeValue((uint8_t*)&metricsBuf[mSent], chunkSize);
-                  mSent += chunkSize;
-                  delayMicroseconds(500);
+                  txCharacteristic.writeValue("<<END>>\n");
+                  char metricsBuf[80];
+                  snprintf(metricsBuf, sizeof(metricsBuf), "---METRICS---\npeak_voltage=%.4f,fall_time_us=%.2f,avg_fall_time_us=%.2f\n",
+                    peakStartVoltage, fallTimeRegUs, storedBatchAvg10 > 0.0 ? storedBatchAvg10 : fallTimeRegUs);
+                  int mLen = strlen(metricsBuf);
+                  int mSent = 0;
+                  while (mSent < mLen) {
+                    int chunkSize = min(20, mLen - mSent);
+                    txCharacteristic.writeValue((uint8_t*)&metricsBuf[mSent], chunkSize);
+                    mSent += chunkSize;
+                    delayMicroseconds(500);
+                  }
                 }
               }
               

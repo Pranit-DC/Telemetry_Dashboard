@@ -95,6 +95,10 @@ class TelemetryDashboard(ctk.CTk):
             self.burst_history.append(burst)
             self.latest_burst = burst
             updated = True
+            self.log_message(
+                f"Burst #{burst.burst_id} | Peak: {burst.peak_voltage:.3f} V | "
+                f"Fall Time: {burst.fall_time_us:.1f} μs | Rolling Avg: {burst.avg_fall_time_us:.1f} μs"
+            )
         
         # Trim old bursts to prevent memory leak
         if len(self.burst_history) > MAX_BURST_HISTORY:
@@ -111,11 +115,13 @@ class TelemetryDashboard(ctk.CTk):
         self.latest_burst = None
         self._reset_canvas()
         self.service.start_session()
+        self.sidebar.set_acquisition_state(True)
         self.log_message(f'Started recording: {self.service.session_id}')
 
     def _on_stop(self):
         """Stop the current session."""
         session_id = self.service.stop_session()
+        self.sidebar.set_acquisition_state(False)
         self.log_message(f'Recording stopped. Session {session_id} saved.')
 
     def _on_clear(self):

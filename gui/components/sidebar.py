@@ -31,7 +31,7 @@ class Sidebar(ctk.CTkFrame):
         
         self.btn_stop = ctk.CTkButton(
             self, text="Stop", fg_color="#bf212f", hover_color="#e62737",
-            corner_radius=16, width=180, height=34, command=on_stop
+            corner_radius=16, width=180, height=34, command=on_stop, state="disabled"
         )
         self.btn_stop.grid(row=3, column=0, padx=20, pady=5)
         
@@ -85,5 +85,14 @@ class Sidebar(ctk.CTkFrame):
 
     def update_status(self, text, color):
         self.lbl_status.configure(text=text, text_color=color)
+
+    def set_acquisition_state(self, is_acquiring: bool):
+        """Mutually enable/disable Start and Stop buttons."""
+        if is_acquiring:
+            self.btn_start.configure(state="disabled")
+            self.btn_stop.configure(state="normal")
+        else:
+            self.btn_start.configure(state="normal")
+            self.btn_stop.configure(state="disabled")
         
 
