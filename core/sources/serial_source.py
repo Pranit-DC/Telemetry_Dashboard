@@ -10,7 +10,7 @@ from core.parser.trace_parser import TraceParser
 class SerialSource(DataSource):
     """Data source for acquiring telemetry over a serial port."""
     
-    def __init__(self, burst_queue: Queue, port='', baud_rate=115200):
+    def __init__(self, burst_queue: Queue, port='COM15', baud_rate=115200):
         super().__init__(burst_queue)
         self.port = port
         self.baud_rate = baud_rate

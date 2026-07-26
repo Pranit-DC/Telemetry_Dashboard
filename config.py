@@ -36,7 +36,7 @@ class AppConfig:
         
     @property
     def com_port(self) -> str:
-        return self._data.get('com_port', '')
+        return self._data.get('com_port', 'COM15')
         
     @property
     def baud_rate(self) -> int:
@@ -71,7 +71,7 @@ class AppConfig:
         return {
             'ble_device_name': 'GIGA_WORKSTATION',
             'ble_timeout': 15,
-            'com_port': '',
+            'com_port': 'COM15',
             'baud_rate': 115200,
             'graph_display_window_sec': 20,
             'chart_line_thickness': 2,

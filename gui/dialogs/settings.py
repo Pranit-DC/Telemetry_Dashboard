@@ -90,7 +90,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def _populate_fields(self):
         """Populate inputs from current config."""
         self.entry_device.insert(0, getattr(self.config, 'ble_device_name', 'GIGA_WORKSTATION'))
-        self.entry_com.insert(0, getattr(self.config, 'com_port', ''))
+        self.entry_com.insert(0, getattr(self.config, 'com_port', 'COM15'))
         self.combo_baud.set(str(getattr(self.config, 'baud_rate', '115200')))
         self.entry_timeout.insert(0, str(getattr(self.config, 'ble_timeout', 10.0)))
         

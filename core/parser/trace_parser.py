@@ -38,7 +38,7 @@ class TraceParser:
             if not line:
                 continue
                 
-            if line == "---BEGIN TRACE DATA---":
+            if line == "<<BEG>>":
                 self._state = "in_frame"
                 self._current_points.clear()
                 self._metrics.clear()
@@ -46,7 +46,7 @@ class TraceParser:
                 
             if line == "Sample_Index,Time_us,Voltage_V":
                 continue
-            if line == "---END TRACE DATA---":
+            if line == "<<END>>":
                 self._state = "idle" # metrics may follow or not
                 if self._current_points:
                     # The Arduino firmware doesn't transmit METRICS, so calculate peak manually

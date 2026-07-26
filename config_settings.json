@@ -1,7 +1,7 @@
 {
     "ble_device_name": "GIGA_WORKSTATION",
     "ble_timeout": 15.0,
-    "com_port": "",
+    "com_port": "COM15",
     "baud_rate": 115200,
     "graph_display_window_sec": 30.0,
     "chart_line_thickness": 3.0,

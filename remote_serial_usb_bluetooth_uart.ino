@@ -190,6 +190,7 @@ void updateDisplayMetrics(float peakVolts, float currentFallTimeUs, float batchA
   }
 }
 
+
 void setup() {
   Serial.begin(115200);
 
@@ -456,7 +457,7 @@ void loop() {
               
               // ROUTE A: REMOTE TRANSMISSION OVER NATIVE USB SERIAL ONLY
               if (currentRoute == ROUTE_REMOTE_USB) {
-                Serial.println("\n---BEGIN TRACE DATA---");
+                Serial.println("\n<<BEG>>");
                 Serial.println("Sample_Index,Time_us,Voltage_V");
 
                 for (int i = regStartIdx; i <= regEndIdx; i++) {
@@ -469,7 +470,7 @@ void loop() {
                     Serial.println(sampleVoltage, 4);
                   }
                 }
-                Serial.println("---END TRACE DATA---");
+                Serial.println("<<END>>");
                 Serial.flush(); 
               }
 
@@ -477,8 +478,8 @@ void loop() {
               else if (currentRoute == ROUTE_REMOTE_BLE && bleInitialized && BLE.central() && BLE.central().connected()) {
                 char bleTxBuffer[45];
                 
-                txCharacteristic.writeValue("\n---BEGIN TRACE DATA---\n");
-                txCharacteristic.writeValue("Sample_Index,Time_us,Voltage_V\n");
+                txCharacteristic.writeValue("<<BEG>>\n");
+                txCharacteristic.writeValue("Index,Time,Volt\n");
 
                 for (int i = regStartIdx; i <= regEndIdx; i++) {
                   if (i < TARGET_SAMPLES) {
@@ -496,7 +497,7 @@ void loop() {
                     }
                   }
                 }
-                txCharacteristic.writeValue("---END TRACE DATA---\n");
+                txCharacteristic.writeValue("<<END>>\n");
               }
               
               // ROUTE C: LOCAL PROCESSING AND RENDERING ONLY
