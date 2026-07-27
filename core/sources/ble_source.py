@@ -117,6 +117,7 @@ class BLESource(DataSource):
     def _notification_handler(self, sender, data: bytearray):
         try:
             raw_str = data.decode('utf-8')
+            print(f"[RAW BLE RX]: {raw_str}", end="", flush=True)
             bursts = self.parser.feed(raw_str)
             for burst in bursts:
                 self.burst_queue.put(burst)
