@@ -13,7 +13,7 @@ class AnalyticsWindow(ctk.CTkToplevel):
         super().__init__()
         self.title("Data Analytics & Post-Processing")
         self.minsize(1000, 700)
-        self.after(10, lambda: self.state("zoomed"))  # Windows-native maximize, DPI-safe
+        self.after(10, lambda: self.state("zoomed"))
         
         self.db = db
         self.burst_history = burst_history
