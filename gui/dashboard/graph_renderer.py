@@ -1,4 +1,5 @@
 import numpy as np
+from core.analysis.fall_time import DROP_THRESHOLD
 
 class GraphRenderer:
     """
@@ -6,16 +7,12 @@ class GraphRenderer:
     """
     def __init__(self, dashboard_page):
         self.page = dashboard_page
-        self.locked_burst = None
     
     def refresh(self, latest_burst, burst_history):
-        """Update both charts and metric cards."""
+        """Update the chart and metric cards."""
         if latest_burst:
-            display_burst = self.locked_burst if self.locked_burst else latest_burst
-            self._update_trace_chart(display_burst)
-            self._update_metric_cards(display_burst, burst_history)
-        if burst_history:
-            self._update_trend_chart(burst_history)
+            self._update_trace_chart(latest_burst)
+            self._update_metric_cards(latest_burst, burst_history)
         self._update_diagnostics(burst_history)
     
     def _update_trace_chart(self, burst):
@@ -25,33 +22,31 @@ class GraphRenderer:
             
         times = [p.time_us for p in burst.trace_points]
         voltages = [p.voltage for p in burst.trace_points]
+        # All 700 raw points are always plotted here - nothing is trimmed or
+        # decimated. Only the axis view (xlim) is narrowed below; the full
+        # data stays in the Line2D object and is reachable via zoom/pan/Home.
         self.page.trace_line.set_data(times, voltages)
-        
-        # Smart Default Zoom: Focus on 900us region starting 40us before peak drop
-        peak_idx = max(range(len(burst.trace_points)), key=lambda i: burst.trace_points[i].voltage)
+
+        # Smart Default Zoom: focus on the 900us region starting 40us before
+        # the peak drop. Peak detection intentionally mirrors the exact same
+        # drop-threshold scan the firmware/regression uses (see
+        # core/analysis/fall_time.py), NOT a naive global-max search - so the
+        # zoomed window always agrees with the window the fall-time
+        # regression actually fit against.
+        peak_idx = 0
+        for i in range(len(voltages) - 1):
+            if (voltages[i] - voltages[i + 1]) >= DROP_THRESHOLD:
+                peak_idx = i
+                break
         peak_time = times[peak_idx]
-        
+
         min_x = max(times[0], peak_time - 40.0)
         max_x = min(times[-1], peak_time + 860.0)
-        
+
         self.page.ax_trace.set_xlim(min_x, max_x)
         self.page.ax_trace.relim()
         self.page.ax_trace.autoscale_view(scalex=False, scaley=True)
         self.page.canvas_trace.draw_idle()
-    
-    def _update_trend_chart(self, burst_history):
-        """Plot fall time trend over burst index (rolling window of 20)."""
-        window_size = 20
-        start_idx = max(0, len(burst_history) - window_size)
-        display_history = burst_history[start_idx:]
-        
-        indices = list(range(start_idx, len(burst_history)))
-        fall_times = [b.fall_time_us for b in display_history]
-        self.page.trend_line.set_data(indices, fall_times)
-        if self.page.ax_trend.get_autoscalex_on() and self.page.ax_trend.get_autoscaley_on():
-            self.page.ax_trend.relim()
-            self.page.ax_trend.autoscale_view()
-        self.page.canvas_trend.draw_idle()
     
     def _update_metric_cards(self, burst, history):
         """Update the metric card values on the page."""
@@ -76,8 +71,6 @@ class GraphRenderer:
         self.page.lbl_burst_count.configure(text=f'Burst Count: {len(history)}')
     
     def clear(self):
-        """Clear the charts."""
+        """Clear the chart."""
         self.page.trace_line.set_data([], [])
-        self.page.trend_line.set_data([], [])
         self.page.canvas_trace.draw_idle()
-        self.page.canvas_trend.draw_idle()

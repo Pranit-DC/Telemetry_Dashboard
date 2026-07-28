@@ -46,6 +46,7 @@ class TelemetryDashboard(ctk.CTk):
         # Data state for display
         self.burst_history = []
         self.latest_burst = None
+        self._run_state = 'stopped'  # 'stopped' | 'running' | 'paused'
         
         # State callback
         self.service.set_on_state_change(lambda s: self.after(0, lambda: self._on_state_change(s)))
@@ -78,14 +79,8 @@ class TelemetryDashboard(ctk.CTk):
         )
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         
-        self.dashboard_page = DashboardPage(
-            self, 
-            on_reset_view=self._reset_canvas
-        )
+        self.dashboard_page = DashboardPage(self)
         self.dashboard_page.grid(row=0, column=1, sticky="nsew")
-        
-        # Bind click event on trend chart
-        self.dashboard_page.canvas_trend.mpl_connect('button_press_event', self._on_trend_click)
 
     def _start_polling(self):
         """Poll the burst queue every 100ms."""
@@ -110,18 +105,40 @@ class TelemetryDashboard(ctk.CTk):
         self.after(self._poll_interval, self._start_polling)
         
     def _on_start(self):
-        """Start a new acquisition session."""
-        self.burst_history.clear()
-        self.latest_burst = None
-        self._reset_canvas()
-        self.service.start_session()
-        self.sidebar.set_acquisition_state(True)
-        self.log_message(f'Started recording: {self.service.session_id}')
+        """Single button handler for Start / Pause / Resume.
+
+        Behavior depends on current run state:
+          - no session running  -> start a brand new session
+          - session running     -> pause (stream stops, session stays open)
+          - session paused      -> resume (same session_id, stream restarts)
+        """
+        if not self.service.session_id:
+            # Nothing running: start fresh.
+            self.burst_history.clear()
+            self.latest_burst = None
+            self._reset_canvas()
+            self.service.start_session()
+            self._run_state = 'running'
+            self.sidebar.set_run_state('running')
+            self.log_message(f'Started recording: {self.service.session_id}')
+
+        elif self._run_state == 'running':
+            self.service.pause_session()
+            self._run_state = 'paused'
+            self.sidebar.set_run_state('paused')
+            self.log_message(f'Paused. Session {self.service.session_id} still open.')
+
+        elif self._run_state == 'paused':
+            self.service.resume_session()
+            self._run_state = 'running'
+            self.sidebar.set_run_state('running')
+            self.log_message(f'Resumed session {self.service.session_id}.')
 
     def _on_stop(self):
-        """Stop the current session."""
+        """Fully stop and finalize the current session, from either running or paused."""
         session_id = self.service.stop_session()
-        self.sidebar.set_acquisition_state(False)
+        self._run_state = 'stopped'
+        self.sidebar.set_run_state('stopped')
         self.log_message(f'Recording stopped. Session {session_id} saved.')
 
     def _on_clear(self):
@@ -198,34 +215,9 @@ class TelemetryDashboard(ctk.CTk):
         if hasattr(self, 'dashboard_page'):
             self.dashboard_page.log_message(message)
             
-    def _on_trend_click(self, event):
-        """Handle drill-down click on the trend chart."""
-        if event.inaxes != self.dashboard_page.ax_trend:
-            return
-        if not self.burst_history or event.xdata is None:
-            return
-        
-        # The trend chart X-axis uses the rolling window with absolute burst indices.
-        # Convert the clicked X position to an index into burst_history list.
-        chart_idx = int(round(event.xdata))
-        # The rolling window starts at (total_bursts - window_size), so offset:
-        window_start = max(0, len(self.burst_history) - 20)
-        list_idx = chart_idx - window_start
-        if 0 <= list_idx < len(self.burst_history):
-            clicked_burst = self.burst_history[list_idx]
-            self.renderer.locked_burst = clicked_burst
-            self.dashboard_page.chart_trace.ax.set_title(f"Decay Trace (Burst #{chart_idx})")
-            self._refresh_dashboard()
-
     def _reset_canvas(self):
-        """Clear the graphs or reset live view."""
-        if self.renderer.locked_burst:
-            self.renderer.locked_burst = None
-            self.dashboard_page.chart_trace.ax.set_title("Decay Trace (Live Capture)")
-            if self.latest_burst:
-                self._refresh_dashboard()
-        else:
-            self.renderer.clear()
+        """Clear the graph to prepare for a fresh live view."""
+        self.renderer.clear()
 
     def cleanup(self):
         """Cleanup resources before exit."""

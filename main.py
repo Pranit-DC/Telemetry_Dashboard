@@ -5,7 +5,7 @@ def main():
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
     
-    app = TelemetryDashboard(source_type="ble")
+    app = TelemetryDashboard()
     
     def on_close():
         try:

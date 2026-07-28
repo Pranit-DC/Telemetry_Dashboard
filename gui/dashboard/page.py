@@ -1,12 +1,13 @@
 import customtkinter as ctk
 import datetime
 from gui.components.chart import BaseChart
+from core.analysis.fall_time import TARGET_SAMPLES, US_PER_SAMPLE
 
 class DashboardPage(ctk.CTkFrame):
     """
     Main dashboard page displaying metrics and charts.
     """
-    def __init__(self, master, on_reset_view):
+    def __init__(self, master):
         super().__init__(master, fg_color="transparent")
         
         # Grid layout for Dashboard: 3 rows (metrics, charts, console)
@@ -18,7 +19,7 @@ class DashboardPage(ctk.CTkFrame):
         self.cards = {}
         
         self._build_top_bar()
-        self._build_charts(on_reset_view)
+        self._build_charts()
         self._build_console()
 
     def _build_top_bar(self):
@@ -48,16 +49,15 @@ class DashboardPage(ctk.CTkFrame):
             
             self.cards[metric] = {"frame": card, "title": lbl_title, "value": lbl_val}
 
-    def _build_charts(self, on_reset_view):
-        """Middle row of charts."""
+    def _build_charts(self):
+        """Middle row: single decay chart, full width."""
         self.frame_charts = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_charts.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-        
+
         self.frame_charts.grid_rowconfigure(0, weight=1)
-        self.frame_charts.grid_columnconfigure(0, weight=1) # Left chart (50%)
-        self.frame_charts.grid_columnconfigure(1, weight=1) # Right chart (50%)
-        
-        # Left Chart: Decay Trace
+        self.frame_charts.grid_columnconfigure(0, weight=1)
+
+        # Decay Trace (only chart now — Fall Time Trend removed for simplicity)
         self.chart_trace = BaseChart(
             self.frame_charts,
             title="Decay Trace (Latest Capture)",
@@ -68,28 +68,18 @@ class DashboardPage(ctk.CTkFrame):
         self.ax_trace = self.chart_trace.ax
         self.canvas_trace = self.chart_trace.canvas
         self.trace_line, = self.ax_trace.plot([], [], color="#3A7DFF", linewidth=1.5)
-        
-        # Right Chart: Measurement Trend
-        self.chart_trend = BaseChart(
-            self.frame_charts,
-            title="Fall Time Trend",
-            x_label="Burst #",
-            y_label="Fall Time (μs)"
-        )
-        self.chart_trend.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        self.ax_trend = self.chart_trend.ax
-        self.canvas_trend = self.chart_trend.canvas
-        self.trend_line, = self.ax_trend.plot([], [], color="#2EA44F", linewidth=1.5)
-        
-        # Reset button inside the chart's bottom control bar
-        btn_reset = ctk.CTkButton(
-            self.chart_trace.control_bar, text="Reset Live View", width=120, height=28,
-            corner_radius=14, font=("Segoe UI", 11, "bold"),
-            fg_color="#363636", hover_color="#1F1F1F", 
-            text_color="white",
-            command=on_reset_view
-        )
-        btn_reset.pack(side="right", padx=(10, 16), pady=(4, 12))
+
+        # Every burst is always exactly TARGET_SAMPLES points at a fixed
+        # US_PER_SAMPLE spacing (set by the firmware), so the full-trace
+        # range is a known constant, not something to infer from whatever
+        # data happens to be plotted first. Set it now and lock it in as the
+        # toolbar's "Home" view *before* any per-burst zoom is ever applied,
+        # so Home reliably zooms out to the complete 2.8ms trace - not to
+        # matplotlib's default empty (0,1) view.
+        full_trace_max_us = (TARGET_SAMPLES - 1) * US_PER_SAMPLE
+        self.ax_trace.set_xlim(0, full_trace_max_us)
+        self.ax_trace.set_ylim(0, 3.3)  # matches ADC reference voltage range
+        self.chart_trace.toolbar.update()
 
     def _build_console(self):
         """Bottom row: diagnostics and console."""

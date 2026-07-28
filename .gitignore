@@ -5,7 +5,3 @@ __pycache__/
 *$py.class
 
 Dashboard.zip
-
-#  /grill-me ok. so this version will work tomorrow at BARC. But in worst case what if it doesnt work. So for that reason, i want a new version of this dashboard with totally
-#   different approach of DAQ. I have backuped current version so you are good to make any changes here. I want different approach which will work for all data sources and
-#   especially for BLE. Like before starting tell me what approaches are used in different industries, which one is most suitable for my situation.

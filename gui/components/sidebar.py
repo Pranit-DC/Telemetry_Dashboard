@@ -23,6 +23,9 @@ class Sidebar(ctk.CTkFrame):
         self.lbl_status.grid(row=1, column=0, padx=20, pady=(0, 20))
         
         # Controls
+        # This button triples as Start / Pause / Resume - see set_run_state().
+        # Stop (separate, below) always fully ends the session regardless
+        # of whether the stream is currently running or paused.
         self.btn_start = ctk.CTkButton(
             self, text="Start Acquisition", fg_color="#006f3c", hover_color="#008748",
             corner_radius=16, width=180, height=34, command=on_start
@@ -86,13 +89,19 @@ class Sidebar(ctk.CTkFrame):
     def update_status(self, text, color):
         self.lbl_status.configure(text=text, text_color=color)
 
-    def set_acquisition_state(self, is_acquiring: bool):
-        """Mutually enable/disable Start and Stop buttons."""
-        if is_acquiring:
-            self.btn_start.configure(state="disabled")
-            self.btn_stop.configure(state="normal")
-        else:
-            self.btn_start.configure(state="normal")
-            self.btn_stop.configure(state="disabled")
-        
+    def set_run_state(self, run_state: str):
+        """Update button labels/colors for one of: 'stopped', 'running', 'paused'.
 
+        The Start button doubles as Start/Pause/Resume; Stop is only ever
+        enabled while a session exists (running or paused), and always
+        fully ends it.
+        """
+        if run_state == 'running':
+            self.btn_start.configure(text="Pause", fg_color="#8a6d1a", hover_color="#a6821f")
+            self.btn_stop.configure(state="normal")
+        elif run_state == 'paused':
+            self.btn_start.configure(text="Resume", fg_color="#006f3c", hover_color="#008748")
+            self.btn_stop.configure(state="normal")
+        else:  # 'stopped'
+            self.btn_start.configure(text="Start Acquisition", fg_color="#006f3c", hover_color="#008748")
+            self.btn_stop.configure(state="disabled")

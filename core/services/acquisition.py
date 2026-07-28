@@ -78,6 +78,21 @@ class AcquisitionService:
         session_id = self._session_id
         self._session_id = None
         return session_id
+
+    def pause_session(self):
+        """Stop the stream but keep the current session open (no DB finalize).
+
+        Bursts already stored stay exactly where they are; resume_session()
+        continues writing into the same session_id rather than starting a
+        new run.
+        """
+        if self._source:
+            self._source.stop()
+
+    def resume_session(self):
+        """Resume a paused session - same session_id, stream restarts."""
+        if self._source and self._session_id:
+            self._source.start()
     
     def poll_queue(self):
         """Called by the GUI timer. Process all pending bursts."""
