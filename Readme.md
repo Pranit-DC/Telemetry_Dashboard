@@ -58,3 +58,9 @@ For full architectural details, data flow diagrams, and design decisions, please
 ## Firmware
 
 The matching Arduino GIGA R1 firmware is available in the `firmware/` directory. It uses the `AdvancedAnalog` library to sample at 250 kSPS, performs onboard log-linear regression, and transmits framed text packets to the dashboard via native USB CDC or Nordic BLE UART.
+
+## Testing
+
+- pytest tests/ -v                          # pure logic, always runs, no hardware
+- python -m pytest tests/ -v
+- pytest tests/hardware --port COM7 -v      # real GIGA — plug in, flash firmware, then run
