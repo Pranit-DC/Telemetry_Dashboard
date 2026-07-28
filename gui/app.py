@@ -91,8 +91,7 @@ class TelemetryDashboard(ctk.CTk):
             self.latest_burst = burst
             updated = True
             self.log_message(
-                f"Burst #{burst.burst_id} | Peak: {burst.peak_voltage:.3f} V | "
-                f"Fall Time: {burst.fall_time_us:.1f} μs | Rolling Avg: {burst.avg_fall_time_us:.1f} μs"
+                self.log_message(f"Burst #{burst.burst_id} received — {len(burst.trace_points)} raw samples stored.")
             )
         
         # Trim old bursts to prevent memory leak
