@@ -16,34 +16,19 @@ class GraphRenderer:
         self._update_diagnostics(burst_history)
     
     def _update_trace_chart(self, burst):
-        """Plot the decay trace: voltage vs time (us) with smart default zoom."""
+        """Plot the decay trace: voltage vs time (us), full 700-sample view by default."""
         if not burst.trace_points:
             return
-            
+
         times = [p.time_us for p in burst.trace_points]
         voltages = [p.voltage for p in burst.trace_points]
-        # All 700 raw points are always plotted here - nothing is trimmed or
-        # decimated. Only the axis view (xlim) is narrowed below; the full
-        # data stays in the Line2D object and is reachable via zoom/pan/Home.
         self.page.trace_line.set_data(times, voltages)
 
-        # Smart Default Zoom: focus on the 900us region starting 40us before
-        # the peak drop. Peak detection intentionally mirrors the exact same
-        # drop-threshold scan the firmware/regression uses (see
-        # core/analysis/fall_time.py), NOT a naive global-max search - so the
-        # zoomed window always agrees with the window the fall-time
-        # regression actually fit against.
-        peak_idx = 0
-        for i in range(len(voltages) - 1):
-            if (voltages[i] - voltages[i + 1]) >= DROP_THRESHOLD:
-                peak_idx = i
-                break
-        peak_time = times[peak_idx]
-
-        min_x = max(times[0], peak_time - 40.0)
-        max_x = min(times[-1], peak_time + 860.0)
-
-        self.page.ax_trace.set_xlim(min_x, max_x)
+        # Default view is always the complete burst (all 700 samples, full
+        # 2.8ms) - not narrowed to any sub-window. User can still zoom/pan via
+        # the toolbar; this just controls what's shown immediately on each
+        # new capture.
+        self.page.ax_trace.set_xlim(times[0], times[-1])
         self.page.ax_trace.relim()
         self.page.ax_trace.autoscale_view(scalex=False, scaley=True)
         self.page.canvas_trace.draw_idle()
