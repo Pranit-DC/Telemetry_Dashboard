@@ -1,84 +1,83 @@
-# BARC Dashboard — Scratch Development Design Decisions
+# Design Decisions
 
-This document acts as a development log explaining **why** the core technologies, libraries, and design patterns were chosen from day one of starting this project from scratch, and why alternative design options were skipped.
-
----
-
-## 1. Choosing the Tech Stack (Core Technologies)
-
-### Why CustomTkinter instead of PySide/PyQt or standard Tkinter?
-* **The Decision**: CustomTkinter was chosen for the Graphical User Interface.
-* **Why**: 
-  * Standard Python Tkinter looks outdated and lacks native dark mode.
-  * PyQt/PySide is highly powerful but has a steep learning curve and heavy licensing.
-  * CustomTkinter provides modern, styled widgets (rounded corners, clean fonts, dark/light modes) right out of the box with standard Tkinter syntax.
-
-### Why Matplotlib instead of other plotting libraries?
-* **The Decision**: Matplotlib was selected for live signal rendering.
-* **Why**:
-  * Matplotlib is the industry standard for scientific plotting in Python.
-  * Integrates natively with Tkinter using a backend canvas widget (`FigureCanvasTkAgg`).
-  * Gives us a built-in Navigation Toolbar (for panning, zooming, and saving figures) with minimal configuration.
-
-### Why SQLite instead of MySQL or PostgreSQL?
-* **The Decision**: SQLite was chosen as the database management system.
-* **Why**:
-  * Serverless, zero-configuration database stored in a single file (`telemetry_archive.db`).
-  * Supports standard SQL, transactions, foreign keys, and indexes, handling our JSON-serialized burst data easily.
+A log of the "why" behind the main technical choices, for anyone (including a review
+panel) asking "why did you build it this way?"
 
 ---
 
-## 2. Architecture & Directory Design
+## Tech stack
 
-### Why separate the project into `core`, `models`, and `gui` packages?
-* **The Decision**: Organized the codebase into an MVC (Model-View-Controller) inspired package structure.
-* **Why**:
-  * By splitting the code into `core/` (services, data sources, parser, database), `models/` (data structures like `TraceBurst`), and `gui/` (layouts), the backend remains completely independent.
-  * Enables swapping out the simulator for USB Serial or BLE sources via a formal `DataSource` ABC without touching UI logic.
+**CustomTkinter, not plain Tkinter or PyQt/PySide.** Plain Tkinter looks dated and has no
+built-in dark mode. Qt-based toolkits are powerful but heavier to learn and to package,
+especially with the offline/air-gapped constraint. CustomTkinter gives modern-looking
+widgets (rounded corners, dark theme) on top of the standard library's Tkinter, with a
+similar API — a reasonable middle ground for a learning project.
 
----
+**Matplotlib, not a custom or lighter-weight plotting widget.** It's the standard for
+scientific plotting in Python, it embeds directly into Tkinter via
+`FigureCanvasTkAgg`, and it comes with a working pan/zoom/save toolbar for free — useful
+for actually inspecting a decay curve, not just glancing at it.
 
-## 3. Concurrency & Data Flow
+**SQLite, not a client-server database.** Single file, zero setup, no service to install
+or keep running — a good fit for a single-user desktop tool in an offline lab
+environment. Supports real SQL, indexes, and foreign keys, which is all this project
+needs.
 
-### Why use `queue.Queue` polling instead of sharing locked lists?
-* **The Decision**: Refactored from locked arrays to a message-passing architecture using `queue.Queue`.
-* **Why**:
-  * Previously, the background thread would lock lists, append data, and trigger a UI redraw. This tightly coupled the UI to the background thread.
-  * Using a standard thread-safe `queue.Queue`, the background `DataSource` just produces `TraceBurst` objects. The main UI thread uses a timer (`root.after`) to poll the queue.
-  * This completely decouples acquisition speed from UI refresh rate and eliminates race conditions.
+## Architecture
 
----
+**Split into `core/`, `models/`, `gui/`.** Keeping business logic (`core/`) completely
+separate from the UI (`gui/`) means a data source can be swapped (simulator ↔ Serial ↔
+BLE) without touching a single line of GUI code, and the parsing/regression/storage logic
+can be unit-tested without ever opening a window (see the `tests/` folder).
 
-## 4. Telemetry Modeling & Storage
+**A `DataSource` abstract base class.** `SimulatorSource`, `SerialSource`, and
+`BLESource` all expose the same five methods. `AcquisitionService` and the GUI never
+branch on "which kind of source is this" — they just call `connect()`/`start()`/`stop()`
+on whatever's currently active.
 
-### Why use a "Burst" architecture instead of continuous sampling?
-* **The Decision**: Switched the entire application to model data as discrete `TraceBurst` events rather than continuous time streams.
-* **Why**:
-  * The actual Arduino GIGA R1 firmware samples photodetector transients at 250 kSPS over 600μs, then processes the data. It sends this data in chunks, not a continuous stream.
-  * Modeling the data as bursts (`TraceBurst` objects containing `TracePoint` lists) perfectly maps to the physical reality of the hardware.
+## Concurrency
 
-### Why serialize trace data as JSON in SQLite?
-* **The Decision**: The SQLite `trace_bursts` table stores `trace_data` as a serialized JSON string.
-* **Why**:
-  * Inserting 150 individual points into a SQL table for every single burst is incredibly slow and fragments the database.
-  * By serializing the trace array into JSON, we can save an entire capture event in a single row insert, maintaining high performance while keeping the data structured.
+**`queue.Queue`, not shared/locked lists.** Background threads (Serial reads, BLE
+notifications, the simulator's timer loop) never touch the GUI directly. They only ever
+push finished `TraceBurst` objects into a `queue.Queue`; the GUI thread drains it on a
+100 ms timer. This keeps acquisition speed and UI refresh rate independent, and avoids
+the class of bugs where a background thread updates a Tkinter widget out from under the
+main event loop.
 
----
+## Data modeling
 
-## 5. Configuration & Persistence Design
+**Burst-based, not a continuous stream.** The hardware itself doesn't produce a
+continuous stream — it fires, captures a fixed 700-sample window, and repeats. Modeling
+data as discrete `TraceBurst` events (each holding a list of `TracePoint`s) matches the
+physical reality of the sensor directly, rather than forcing it into a shape it doesn't
+naturally have.
 
-### Why use the `AppConfig` class approach?
-* **The Decision**: Centralized settings in a formal `AppConfig` class backed by JSON.
-* **Why**:
-  * Moving away from global variables makes the code testable and predictable.
-  * `AppConfig` provides typed properties, handling migration, default values, and saving state to `config_settings.json` automatically.
+**Fall-time regression ported line-for-line from the firmware.** Rather than trusting
+whatever number the Arduino reports (which the current firmware doesn't even send over
+Serial, and which the BLE path deliberately never trusts either), the exact same
+log-linear regression — same offsets, same thresholds, same rounding constant — is
+reimplemented in Python (`core/analysis/fall_time.py`). This guarantees the number shown
+on screen is what the raw samples actually support, computed the same way regardless of
+which transport delivered them.
 
----
+**Trace data stored as one JSON blob per burst, not one row per sample.** At a few
+bursts a second with 700 samples each, one-row-per-sample would create an enormous number
+of rows very quickly and make every session load or delete much slower. Serializing the
+700 points into a single JSON string in one `trace_data` column keeps writes to one
+`INSERT` per burst.
 
-## 6. Parsing & Communication
+## BLE protocol
 
-### Why use a dedicated `TraceParser`?
-* **The Decision**: Extracted framing and CSV parsing into a `TraceParser` class used by both USB Serial and BLE.
-* **Why**:
-  * BLE packets arrive in 20-byte chunks. USB serial packets arrive as lines. The parser abstracts this away, buffering text until complete frames (`---BEGIN TRACE DATA---` to `---METRICS---`) are found.
-  * This means the `BLESource` and `SerialSource` contain zero parsing logic, making them simple and reliable.
+**Binary packets with per-sample indices, not text framing.** An earlier version sent
+BLE data as `<<BEG>>`/`<<END>>` text, the same as Serial. The problem: a single dropped
+BLE notification could silently corrupt or truncate an entire burst, with no way to tell
+which samples were actually missing. Switching to one binary packet per sample (each
+carrying its own index) means gaps are detectable and — via the RESEND command —
+recoverable, at the cost of a slightly more involved protocol.
+
+## Configuration
+
+**A typed `AppConfig` class over raw globals**, backed by `config_settings.json`.
+Centralizing settings behind typed properties (with sensible defaults if a key is
+missing) is more predictable and testable than passing loose module-level constants
+around, and makes the Settings dialog a straightforward read/write against one object.

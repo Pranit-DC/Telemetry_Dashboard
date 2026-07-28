@@ -1,237 +1,110 @@
-# Module 3: Thread-Safe SQLite WAL Storage & CSV Logging
+# 3. Storage — SQLite Database & CSV Logging
 
-Welcome to Module 3! In this module, you will build the data persistence layer. You will learn how to write a high-throughput, thread-safe SQLite database manager and a rolling CSV file logger.
-
----
-
-## 🎯 Learning Objectives
-By the end of this module, you will understand:
-- Why opening/closing database connections repeatedly causes `OperationalError: database is locked`.
-- How **Write-Ahead Logging (WAL)** mode in SQLite drastically improves concurrency.
-- How to serialize complex nested arrays (`trace_points`) into compact JSON strings.
-- How to implement automated daily CSV log rotation.
+Covers `core/database/manager.py` and `core/logging/csv_logger.py`.
 
 ---
 
-## 1. Problem Statement & The SQLite Lock Pitfall
+## 3.1 Why SQLite, and why one persistent connection
 
-### ⚠️ What caused the `database is locked` bug in older code?
-In older versions, every time a new telemetry point arrived (10 times a second), the database manager opened a new `sqlite3.connect()`, wrote a row, and closed it.
+Every burst that comes in during a recording session needs to be saved. SQLite was
+chosen because it's serverless (one file, `telemetry.db`, no separate database process
+to install or configure — important in an offline environment) and still gives proper
+transactions, indexes, and SQL.
 
-On Linux, opening and closing SQLite connections rapidly causes file lock contention between threads. When 10 bursts per second hit the file system, SQLite throws `sqlite3.OperationalError: database is locked` and crashes your application!
+A common mistake with SQLite from multiple threads is opening a fresh connection for
+every write. Under a steady stream of bursts, that causes lock contention and
+`sqlite3.OperationalError: database is locked` crashes. `DatabaseManager` avoids this by:
 
-### The Solution:
-1. **Persistent Connection:** Maintain a **single open connection** `self.conn` for the entire life of the app.
-2. **WAL Mode:** Enable `PRAGMA journal_mode=WAL` during setup. WAL allows concurrent reads while writes take place.
-3. **Thread Locking:** Wrap all SQL queries inside `with self._lock:` using Python's `threading.Lock()`.
+- Opening **one** connection for the whole life of the app (`check_same_thread=False`,
+  since acquisition and the GUI may both touch it).
+- Enabling `PRAGMA journal_mode=WAL`, which lets reads happen concurrently with writes.
+- Wrapping every query in a `threading.Lock()`, so two threads never issue SQL at the
+  same instant.
 
----
+## 3.2 Schema
 
-## 2. Step 1: Designing the Database Schema (`core/database/manager.py`)
+Three tables, created automatically on first run if they don't exist:
 
-We need two primary tables:
-1. `sessions`: Stores metadata for each experimental run (`session_id`, `name`, `start_time`, `end_time`, `burst_count`, `source_type`).
-2. `trace_bursts`: Stores each burst event (`burst_id`, `session_id`, `timestamp`, `peak_voltage`, `fall_time_us`, `avg_fall_time_us`, `trace_data`).
+**`sessions`** — one row per recording run.
 
-### 💡 Mentor's Tip on Storing High-Density Array Data
-Don't create 151 separate rows in the database for 151 sample points! That would bloat your database with millions of rows per hour.
+| Column | Type | Notes |
+|---|---|---|
+| `session_id` | TEXT (PK) | e.g. `RUN_20260716_100532` |
+| `name` | TEXT | Friendly label; defaults to the session_id if not set |
+| `start_time` | TEXT | ISO timestamp |
+| `end_time` | TEXT | ISO timestamp, set when the session is stopped |
+| `burst_count` | INTEGER | Incremented on every insert |
+| `status` | TEXT | `running` → `completed` |
+| `source_type` | TEXT | `simulator` / `serial` / `ble` |
+| `notes` | TEXT | Reserved, not currently written to by the app |
 
-Instead, serialize the 151 points into a single compact JSON string `[[idx, time, voltage], ...]` and store it in the `trace_data TEXT` column of `trace_bursts`.
+**`trace_bursts`** — one row per burst.
 
----
+| Column | Type | Notes |
+|---|---|---|
+| `burst_id` | INTEGER (PK, autoincrement) | Internal SQLite row id |
+| `session_id` | TEXT (FK → sessions) | Cascades on delete |
+| `burst_index` | INTEGER | The burst's own id from the parser/source |
+| `timestamp` | TEXT | ISO timestamp of when it was received |
+| `peak_voltage` | REAL | |
+| `fall_time_us` | REAL | |
+| `avg_fall_time_us` | REAL | Rolling average at the time |
+| `channel` | INTEGER | Currently always `0` — reserved for future multi-channel support |
+| `trace_data` | TEXT | The full 700-point trace, as a JSON string |
 
-## 3. Step 2: Implementing `DatabaseManager`
+**`system_events`** — a general-purpose event log table (`timestamp`, `event_type`,
+`message`). The `DatabaseManager.log_event()` method exists to write to it, but nothing
+in the current codebase calls it yet — it's available for future diagnostics logging.
 
-### Tasks for you:
-1. Create `core/database/manager.py`.
-2. In `__init__()`, initialize `self._lock = threading.Lock()`.
-3. Open `self.conn = sqlite3.connect(..., check_same_thread=False)`.
-4. Execute `PRAGMA journal_mode=WAL;` and `PRAGMA foreign_keys=ON;`.
-5. Write thread-safe methods:
-   - `create_session(session_id, source_type, name)`
-   - `end_session(session_id)`
-   - `insert_burst(session_id, burst)`
-   - `get_session_bursts(session_id)`
-   - `delete_session(session_id)`
-   - `close()`
+### Why the full trace is stored as one JSON string, not 700 rows
 
----
+Inserting 700 individual rows per burst (at ~4 bursts/second) would be extremely slow and
+would bloat the database with hundreds of millions of rows over a long session. Instead,
+`TraceBurst.trace_to_json()` packs the whole `trace_points` list into one compact JSON
+array, stored in the single `trace_data` column — one row write per burst, and it decodes
+back into a full list of `TracePoint`s with `TraceBurst.trace_from_json()` when a session
+is loaded.
 
-## 4. Step 3: Rolling CSV Logger (`core/logging/csv_logger.py`)
-
-### Why do we need a CSV Logger alongside SQLite?
-In research labs like BARC, researchers often want raw CSV files they can open in Excel or MATLAB without querying SQLite.
-
-Our `RollingCSVLogger`:
-- Creates daily log files: `telemetry_metrics_20260723.csv`.
-- Automatically rolls over to a new file when the date changes (`_check_rollover()`).
-- Automatically deletes log files older than 7 days (`_cleanup_old_logs()`).
-- Includes an `export_session_csv()` function to export full 151-point raw traces to CSV on demand.
-
----
-
-## 5. Self-Test & Verification Check
-
-Create `test_module3.py`:
+## 3.3 What `DatabaseManager` exposes
 
 ```python
-from datetime import datetime
-from models.telemetry import TracePoint, TraceBurst
-from core.database.manager import DatabaseManager
-
-db = DatabaseManager()
-session_id = "TEST_RUN_001"
-
-# 1. Create session
-db.create_session(session_id, source_type="simulator", name="Test Session")
-
-# 2. Insert dummy burst
-dummy_points = [TracePoint(i, i * 4.0, 2.5 - (i * 0.01)) for i in range(151)]
-dummy_burst = TraceBurst(1, datetime.now(), dummy_points, 2.5, 120.0, 120.0)
-
-db.insert_burst(session_id, dummy_burst)
-
-# 3. Retrieve and verify
-retrieved = db.get_session_bursts(session_id)
-assert len(retrieved) == 1, "Failed: Should retrieve 1 burst"
-assert len(retrieved[0].trace_points) == 151, "Failed: Should deserialize all 151 points"
-
-# 4. Clean up
-db.delete_session(session_id)
-db.close()
-
-print("✅ Module 3 Self-Test PASSED!")
+create_session(session_id, source_type, name=None)
+end_session(session_id, status='completed')
+insert_burst(session_id, burst)               # also bumps sessions.burst_count
+get_all_sessions(search_term=None)             # for the Session Manager list/search
+get_session_display_list()                     # "Name (session_id)" strings
+get_session_bursts(session_id)                 # loads a full session back into TraceBursts
+get_session_by_id(session_id)                  # single session's metadata as a dict
+rename_session(session_id, new_name)
+delete_session(session_id)                     # cascades to its trace_bursts
+log_event(event_type, message)                 # reserved, unused today
+close()
 ```
 
----
+## 3.4 Daily rolling CSV logs (`core/logging/csv_logger.py`)
 
-## 📖 Reference Implementation
+Alongside SQLite, `RollingCSVLogger` writes a lightweight summary row per burst to a
+per-day CSV file, so results can be opened directly in Excel/MATLAB/etc. without touching
+the database at all.
 
-<details>
-<summary>Click to view reference implementation for core/database/manager.py</summary>
+- Filename pattern: `telemetry_metrics_YYYYMMDD.csv` in the configured logs directory.
+- Header: `Timestamp, Burst_ID, Peak_Voltage_V, Fall_Time_us, Avg_Fall_Time_us`.
+- Automatically rolls over to a new file when the date changes.
+- Automatically deletes CSV files older than **7 days**.
 
-```python
-import os
-import sqlite3
-import threading
-from typing import List, Tuple, Dict
-from models.telemetry import TraceBurst
+Separately, `export_session_csv(bursts, filepath)` (also in this module) is what powers
+the sidebar's "Export CSV" button — it writes the **full raw trace** (every sample of
+every burst in the current buffer, not just the summary metrics) to a chosen file.
 
-class DatabaseManager:
-    def __init__(self, config=None):
-        db_dir = config.sqlite_database_directory if config else os.path.abspath(os.getcwd())
-        if not os.path.exists(db_dir):
-            os.makedirs(db_dir)
-        self.db_path = os.path.join(db_dir, "telemetry.db")
-        self._lock = threading.Lock()
-        
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=10.0)
-        self._init_db()
+> **Note:** the sample CSV files that ship in the `logs/` folder of this project are
+> named `telemetry_daily_YYYY-MM-DD.csv`, which doesn't match the `telemetry_metrics_*`
+> pattern the current code actually writes. Those files are leftovers from an earlier
+> version of the logger; a fresh run of the current code will produce
+> `telemetry_metrics_YYYYMMDD.csv` files instead.
 
-    def _init_db(self):
-        with self._lock:
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA foreign_keys=ON")
-            cursor = self.conn.cursor()
-            
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                name TEXT,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                burst_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'running',
-                source_type TEXT,
-                notes TEXT
-            )
-            ''')
-            
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trace_bursts (
-                burst_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                burst_index INTEGER NOT NULL,
-                timestamp TEXT NOT NULL,
-                peak_voltage REAL,
-                fall_time_us REAL,
-                avg_fall_time_us REAL,
-                channel INTEGER DEFAULT 0,
-                trace_data TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-            )
-            ''')
-            self.conn.commit()
+## 3.5 Configurable paths
 
-    def create_session(self, session_id: str, source_type: str, name: str = None):
-        from datetime import datetime
-        with self._lock:
-            start_time = datetime.now().isoformat()
-            self.conn.execute(
-                "INSERT INTO sessions (session_id, name, start_time, source_type) VALUES (?, ?, ?, ?)",
-                (session_id, name or session_id, start_time, source_type)
-            )
-            self.conn.commit()
-
-    def end_session(self, session_id: str, status: str = 'completed'):
-        from datetime import datetime
-        with self._lock:
-            end_time = datetime.now().isoformat()
-            self.conn.execute(
-                "UPDATE sessions SET end_time = ?, status = ? WHERE session_id = ?",
-                (end_time, status, session_id)
-            )
-            self.conn.commit()
-
-    def insert_burst(self, session_id: str, burst: TraceBurst):
-        with self._lock:
-            trace_json = burst.trace_to_json()
-            self.conn.execute('''
-                INSERT INTO trace_bursts (
-                    session_id, burst_index, timestamp, peak_voltage, 
-                    fall_time_us, avg_fall_time_us, channel, trace_data
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                session_id, burst.burst_id, burst.timestamp.isoformat(), 
-                burst.peak_voltage, burst.fall_time_us, burst.avg_fall_time_us,
-                burst.channel, trace_json
-            ))
-            self.conn.execute(
-                "UPDATE sessions SET burst_count = burst_count + 1 WHERE session_id = ?",
-                (session_id,)
-            )
-            self.conn.commit()
-
-    def get_session_bursts(self, session_id: str) -> List[TraceBurst]:
-        from datetime import datetime
-        with self._lock:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT * FROM trace_bursts WHERE session_id = ? ORDER BY burst_index ASC", (session_id,))
-            rows = cursor.fetchall()
-            
-            bursts = []
-            for row in rows:
-                burst = TraceBurst(
-                    burst_id=row[2],
-                    timestamp=datetime.fromisoformat(row[3]),
-                    trace_points=TraceBurst.trace_from_json(row[8]),
-                    peak_voltage=row[4],
-                    fall_time_us=row[5],
-                    avg_fall_time_us=row[6],
-                    channel=row[7]
-                )
-                bursts.append(burst)
-            return bursts
-
-    def delete_session(self, session_id: str):
-        with self._lock:
-            self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-            self.conn.commit()
-
-    def close(self):
-        with self._lock:
-            if self.conn:
-                self.conn.close()
-                self.conn = None
-```
-</details>
+Both the database location and the logs directory are configurable (Settings → File
+Paths), backed by `AppConfig.sqlite_database_directory` and
+`AppConfig.system_logs_directory`. Both default to the current working directory (and
+`./logs` respectively) if not set.

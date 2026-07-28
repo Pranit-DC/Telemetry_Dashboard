@@ -1,52 +1,60 @@
-# Module 4: Concurrency Architecture & Acquisition Service
+# 4. Concurrency & the Acquisition Service
 
-Welcome to Module 4! In this module, you will build the central controller of the backend (`core/services/acquisition.py`). You will learn how to safely bridge multi-threaded hardware data sources with single-threaded GUI widgets using Python's `queue.Queue`.
-
----
-
-## 🎯 Learning Objectives
-By the end of this module, you will understand:
-- **Thread Safety in GUI Development:** Why calling Tkinter functions directly from background threads causes fatal crashes.
-- **Producer-Consumer Pattern:** How data sources (Producers) push into `queue.Queue()`, and the GUI (Consumer) safely polls it.
-- **Service Orchestration:** How `AcquisitionService` manages the lifecycle of data sources, database sessions, and logger calls in one place.
+Covers `core/services/acquisition.py` — the piece that sits between the background data
+sources and the single-threaded GUI.
 
 ---
 
-## 1. Problem Statement & Design Rationale
+## 4.1 The problem: Tkinter is single-threaded
 
-### Why do we need `queue.Queue`?
-Tkinter is single-threaded. If a background serial thread tries to update a Matplotlib plot directly, one of two things will happen:
-1. Tkinter will raise `TclError: main thread is not in main loop`.
-2. Memory will corrupt due to race conditions.
+Serial reads, BLE notifications, and the simulator all run on background threads (see
+`02_DATA_SOURCES.md`). But Tkinter widgets — and Matplotlib canvases embedded in them —
+can only safely be touched from the main thread. Calling a Tkinter method from a
+background thread is a reliable way to crash or corrupt the app.
 
-### The Solution:
+The fix used throughout this codebase is a **producer/consumer queue**:
+
 ```
-[ Background Thread ] ──> ( burst_queue.put ) ──> [ queue.Queue ]
-                                                        │
-                                                        ▼ (Non-blocking polling every 100ms)
-                                            [ app._start_polling() on Main UI Thread ]
+[ background thread ]  --burst_queue.put(burst)-->  [ queue.Queue ]  --get_nowait()-->  [ main thread, every 100ms ]
 ```
 
-By putting `TraceBurst` objects into `queue.Queue()`, thread-safety is guaranteed automatically by Python's internal queue locking!
+`queue.Queue` is already thread-safe internally, so no extra locking is needed around it.
+The background thread only ever *puts*; the main thread (via a Tkinter `.after()` timer
+in `app.py`) only ever *polls and gets*.
 
----
+## 4.2 What `AcquisitionService` actually does
 
-## 2. Step 1: Designing `AcquisitionService` (`core/services/acquisition.py`)
+It's the single object that owns:
 
-### Responsibilities:
-- **Source Management:** Instantiates and switches between `SimulatorSource`, `SerialSource`, and `BLESource` dynamically.
-- **Session Control:** Handles `start_session()` (generates a unique `RUN_YYYYMMDD_HHMMSS` ID, registers it with `DatabaseManager`) and `stop_session()`.
-- **Queue Polling:** Exposes `poll_queue()` so the GUI can fetch pending bursts safely on the main thread.
-- **Data Dispatching:** Routes bursts to `DatabaseManager.insert_burst()` and `RollingCSVLogger.log_burst()`.
+- The currently active `DataSource` (created by `set_source(...)`).
+- The current session id, if a recording is in progress.
+- The shared `burst_queue`.
+- Callbacks the GUI registers to be notified of new bursts / state changes.
 
----
+```python
+service.set_source('ble')          # creates a BLESource, wires its state callback
+service.connect()                  # tells the active source to connect
 
-## 3. Step 2: Implementing `poll_queue()`
+service.start_session('Run 1')     # creates a DB session, starts the source streaming
+...                                 # bursts flow into burst_queue in the background
+service.poll_queue()               # called every 100ms from the GUI thread — drains
+                                    # the queue, writes each burst to DB + CSV, and
+                                    # fires the GUI's on_burst callback
 
-### 💡 Mentor's Guidance on Non-Blocking Queue Polling
-When the GUI calls `poll_queue()`, it must **never block or wait**. If `queue.get()` is called with blocking enabled and the queue is empty, the GUI will freeze!
+service.pause_session()            # stops the stream but leaves the DB session open
+service.resume_session()           # restarts the stream into the SAME session_id
+service.stop_session()             # stops the stream AND finalizes (closes) the session
+```
 
-Always use `get_nowait()` inside a `try...except queue.Empty` block:
+### Start / Pause / Resume / Stop
+
+The sidebar's single "Start" button doubles as Start, Pause, and Resume depending on the
+current run state (`stopped` / `running` / `paused`) — see `05_GUI_AND_VISUALIZATION.md`.
+Pausing stops the underlying source but keeps the same session id open in the database;
+resuming restarts the source without creating a new session. Only the separate "Stop"
+button actually finalizes the session (`db.end_session(..., status='completed')`).
+
+### `poll_queue()` never blocks
 
 ```python
 def poll_queue(self):
@@ -61,174 +69,26 @@ def poll_queue(self):
     return bursts
 ```
 
----
+It always uses `get_nowait()` inside a loop bounded by `empty()`, so if the queue has
+nothing pending, it returns immediately instead of freezing the UI waiting for data.
 
-## 4. Self-Test & Verification Check
+### Routing a burst (`_process_burst`)
 
-Create `test_module4.py`:
+For every burst pulled off the queue:
+1. `self._burst_count` is incremented.
+2. If a session is active, the burst is written to SQLite (`DatabaseManager.insert_burst`)
+   and to the daily CSV (`RollingCSVLogger.log_burst`).
+3. The registered `on_burst` callback is invoked so the GUI can update its chart and
+   metric cards.
 
-```python
-import time
-from config import AppConfig
-from core.database.manager import DatabaseManager
-from core.logging import RollingCSVLogger
-from core.services.acquisition import AcquisitionService
+If no session is active (e.g. the source is connected but the user hasn't pressed Start),
+bursts are **not** persisted — they're effectively discarded after passing through
+(nothing subscribes without a session in the current GUI flow).
 
-config = AppConfig()
-db = DatabaseManager(config)
-logger = RollingCSVLogger(config)
-service = AcquisitionService(db, logger, config)
+## 4.3 Switching sources cleans up after itself
 
-# 1. Set source to simulator
-service.set_source('simulator')
-service.connect()
-
-# 2. Start session
-service.start_session(session_name="Test Queue Run")
-time.sleep(1.0)  # Allow background simulator thread to produce bursts
-
-# 3. Poll queue from main thread
-bursts = service.poll_queue()
-assert len(bursts) >= 3, f"Failed: Expected bursts in queue, got {len(bursts)}"
-
-# 4. Stop & Cleanup
-service.stop_session()
-service.cleanup()
-
-print(f"✅ Module 4 Self-Test PASSED! Successfully polled {len(bursts)} bursts from queue.")
-```
-
----
-
-## 📖 Reference Implementation
-
-<details>
-<summary>Click to view reference implementation for core/services/acquisition.py</summary>
-
-```python
-from queue import Queue
-from datetime import datetime
-from core.database.manager import DatabaseManager
-from core.logging.csv_logger import RollingCSVLogger
-from config import AppConfig
-
-class AcquisitionService:
-    def __init__(self, db: DatabaseManager, csv_logger: RollingCSVLogger, config: AppConfig):
-        self.db = db
-        self.csv_logger = csv_logger
-        self.config = config
-        self._burst_queue = Queue()
-        self._source = None
-        self._session_id = None
-        self._burst_count = 0
-        self._on_burst_callback = None
-        self._on_state_callback = None
-    
-    def set_source(self, source_type: str):
-        if self._source:
-            self.stop_session()
-            self._source.disconnect()
-        
-        if source_type == 'simulator':
-            from core.sources import SimulatorSource
-            self._source = SimulatorSource(self._burst_queue)
-        elif source_type == 'serial':
-            from core.sources import SerialSource
-            self._source = SerialSource(
-                self._burst_queue,
-                port=self.config.com_port,
-                baud_rate=self.config.baud_rate
-            )
-        elif source_type == 'ble':
-            from core.sources import BLESource
-            self._source = BLESource(
-                self._burst_queue,
-                device_name=self.config.ble_device_name,
-                timeout=self.config.ble_timeout
-            )
-        
-        if self._source:
-            self._source.set_state_callback(self._on_source_state_changed)
-    
-    def connect(self):
-        if self._source:
-            self._source.connect()
-    
-    def start_session(self, session_name=None):
-        self._session_id = f'RUN_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
-        self._burst_count = 0
-        self.db.create_session(
-            self._session_id,
-            source_type=self._source.source_type if self._source else 'unknown',
-            name=session_name
-        )
-        if self._source:
-            self._source.start()
-    
-    def stop_session(self):
-        if self._source:
-            self._source.stop()
-        if self._session_id:
-            self.db.end_session(self._session_id, status='completed')
-        session_id = self._session_id
-        self._session_id = None
-        return session_id
-    
-    def poll_queue(self):
-        bursts = []
-        while not self._burst_queue.empty():
-            try:
-                burst = self._burst_queue.get_nowait()
-                bursts.append(burst)
-                self._process_burst(burst)
-            except Exception:
-                break
-        return bursts
-    
-    def _process_burst(self, burst):
-        self._burst_count += 1
-        if self._session_id:
-            self.db.insert_burst(self._session_id, burst)
-            self.csv_logger.log_burst(burst)
-        if self._on_burst_callback:
-            self._on_burst_callback(burst)
-    
-    def _on_source_state_changed(self, new_state):
-        if self._on_state_callback:
-            self._on_state_callback(new_state)
-    
-    def set_on_burst(self, callback):
-        self._on_burst_callback = callback
-    
-    def set_on_state_change(self, callback):
-        self._on_state_callback = callback
-    
-    @property
-    def session_id(self):
-        return self._session_id
-    
-    @property
-    def burst_count(self):
-        return self._burst_count
-    
-    @property
-    def source(self):
-        return self._source
-    
-    @property
-    def is_acquiring(self):
-        return self._source is not None and self._source.state == 'acquiring'
-    
-    def cleanup(self):
-        if self._source:
-            try:
-                self._source.stop()
-                self._source.disconnect()
-            except Exception:
-                pass
-        if self.csv_logger:
-            self.csv_logger.close()
-        if self.db:
-            self.db.close()
-```
-</details>
+`set_source()` disconnects and stops whatever source was previously active before
+creating the new one, so exactly one `DataSource` is ever live. `cleanup()` (called on
+app shutdown) stops and disconnects the active source and closes the CSV logger and
+database connection, so no threads or file handles are left dangling when the window
+closes.

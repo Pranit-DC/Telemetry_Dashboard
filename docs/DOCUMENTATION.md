@@ -1,4 +1,5 @@
-# BARC Telemetry Dashboard — System Specification & Architectural Documentation
+# OLD 
+## BARC Telemetry Dashboard — System Specification & Architectural Documentation
 
 This document serves as the comprehensive technical blueprint for the **BARC Telemetry Dashboard (v5.0.0 Burst Architecture)**. It details the system architecture, database schemas, concurrency models, operational protocols, and onboarding instructions.
 

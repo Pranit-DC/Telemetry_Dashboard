@@ -1,92 +1,64 @@
 # BARC Photodetector Decay Analyzer Dashboard
-## Formal Technical Project Report & System Specification
+## Technical Project Report
 
-**Author:** Junior Project Engineer / Intern  
-**Organization:** Bhabha Atomic Research Centre (BARC), Mumbai  
-**System Version:** v5.0.0 (Event-Burst Architecture)  
-**Date:** July 2026  
+**Organization:** Bhabha Atomic Research Centre (BARC)
+**System version described:** current codebase (`v5.0.0`)
+
+> **A note on this revision:** this report replaces an earlier draft that contained a
+> number of factual errors (wrong sample counts, a described-but-nonexistent dual-chart
+> drill-down feature, and several specific performance numbers — FPS, RAM usage, error
+> rates — that don't appear to have been actually measured anywhere in the project).
+> Those have been removed or corrected below. Where a real number would strengthen a
+> section (e.g. actual measured latency, actual memory footprint over a long run), that's
+> flagged inline as something worth measuring and adding before this goes in front of a
+> panel, rather than restating an unverified figure.
 
 ---
 
 ## Contents
 
-- [1 Introduction](#1-introduction)
-- [2 Review](#2-review)
-- [3 Analysis and Design](#3-analysis-and-design)
-  - [3.1 Entity Relationship Diagram](#31-entity-relationship-diagram)
-  - [3.2 Database Design](#32-database-design)
-    - [3.2.1 Sessions Table](#321-sessions-table)
-    - [3.2.2 Trace Bursts Table](#322-trace-bursts-table)
-    - [3.2.3 System Events Table](#323-system-events-table)
-- [4 Implementation](#4-implementation)
-  - [4.1 Telemetry Data Models & ASCII Framing Parser](#41-telemetry-data-models--ascii-framing-parser)
-  - [4.2 Data Source Abstraction Layer (Simulator, USB Serial, BLE)](#42-data-source-abstraction-layer-simulator-usb-serial-ble)
-  - [4.3 High-Throughput Persistence Engine (SQLite WAL & CSV Logger)](#43-high-throughput-persistence-engine-sqlite-wal--csv-logger)
-  - [4.4 Acquisition Service & Thread-Safe Concurrency Queue](#44-acquisition-service--thread-safe-concurrency-queue)
-  - [4.5 CustomTkinter User Interface & Control System](#45-customtkinter-user-interface--control-system)
-  - [4.6 Real-Time Visualization Engine & Interactive Drill-Down](#46-real-time-visualization-engine--interactive-drill-down)
-- [5 Results and Discussion](#5-results-and-discussion)
-  - [5.1 Intermediate Results and Analysis](#51-intermediate-results-and-analysis)
-    - [5.1.1 Simulator Telemetry Module](#511-simulator-telemetry-module)
-    - [5.1.2 Serial Ingestion & Parsing Module](#512-serial-ingestion--parsing-module)
-    - [5.1.3 Storage & Logging Module](#513-storage--logging-module)
-  - [5.2 Final Results and Analysis](#52-final-results-and-analysis)
-    - [5.2.1 System Accuracy & Execution Latency](#521-system-accuracy--execution-latency)
-  - [5.3 Comparison with Existing Applications](#53-comparison-with-existing-applications)
-    - [5.3.1 Feature Comparison](#531-feature-comparison)
-    - [5.3.2 Performance Comparison](#532-performance-comparison)
-  - [5.4 Summary](#54-summary)
-- [6 Conclusion & Future Work](#6-conclusion--future-work)
-  - [6.1 Conclusion](#61-conclusion)
-  - [6.2 Lessons Learned from Project Management](#62-lessons-learned-from-project-management)
-    - [6.2.1 Requirement Gathering and Understanding](#621-requirement-gathering-and-understanding)
-    - [6.2.2 Time Management](#622-time-management)
-    - [6.2.3 Collaboration and Communication](#623-collaboration-and-communication)
-  - [6.3 Future Work](#63-future-work)
-    - [6.3.1 Multi-Channel Data Acquisition](#631-multi-channel-data-acquisition)
-    - [6.3.2 Advanced Analytics and Reporting (FFT Analysis)](#632-advanced-analytics-and-reporting-fft-analysis)
-    - [6.3.3 Mobile Application Integration](#633-mobile-application-integration)
-    - [6.3.4 Enhanced Notification and Alert System](#634-enhanced-notification-and-alert-system)
-    - [6.3.5 Integration with Remote Cloud Services](#635-integration-with-remote-cloud-services)
-    - [6.3.6 Data Security and Encryption](#636-data-security-and-encryption)
-  - [6.4 Summary](#64-summary)
+1. Introduction
+2. Review of the Problem
+3. Analysis & Design
+4. Implementation
+5. Results & Discussion
+6. Conclusion & Future Work
 
 ---
 
-## 1 Introduction
+## 1. Introduction
 
-In optical physics experiments conducted at the **Bhabha Atomic Research Centre (BARC)**, high-speed photodetector sensors are utilized to analyze pulsed light emission, fluorescence lifetime decay, and transient electronic transitions. These photodetectors generate extremely fast analog decay signals following an excitation pulse. Accurately capturing, visualizing, and analyzing these microsecond-scale decay curves is essential for evaluating sensor responsiveness, material properties, and system degradation over time.
+Optical experiments at BARC use high-speed photodetector sensors to observe pulsed light
+emission and transient decay behaviour. Accurately capturing and analyzing these
+microsecond-scale decay curves matters for evaluating sensor response and material
+behaviour over time.
 
-The **BARC Photodetector Decay Analyzer Dashboard (v5.0.0)** is an advanced, desktop-class data acquisition (DAQ) and visualization suite built using Python, CustomTkinter, Matplotlib, and SQLite. The software interfaces with an **Arduino GIGA R1** micro-controller equipped with a high-speed Advanced ADC sampling at **250 kSPS (250,000 samples per second)**. 
+This project is a desktop data-acquisition and visualization tool for exactly that: it
+interfaces with an **Arduino GIGA R1**, sampling a photodiode at **250,000 samples/second**
+(250 kSPS), captures a fixed **700-sample burst** (2.8 ms) every time the LED excitation
+source fires, and computes the exponential decay ("fall") time of each pulse using a
+log-linear regression. The dashboard receives each burst over USB Serial or Bluetooth Low
+Energy (BLE), visualizes it live, and stores it for later review.
 
-To overcome serial bandwidth constraints, the system operates on an **Event-Burst Architecture**: upon detecting a light pulse, the microcontroller captures a 700-sample raw buffer, isolates the 151-sample decay region ($600\text{ }\mu\text{s}$ window), and transmits framed ASCII packets to the dashboard via USB Serial or Bluetooth Low Energy (BLE). The dashboard parses incoming data frames in real time, computes mathematical regression metrics ($10\%\rightarrow90\%$ fall time), stores trace bursts in a thread-safe Write-Ahead Logging (WAL) SQLite database, and presents a dual-chart visualization interface with interactive historical drill-down capabilities.
+## 2. Review of the Problem
 
----
+Continuous streaming of 250,000 samples/second over a serial link isn't practical — the
+link can't sustain that rate and a GUI reading it directly would stall. The design problem
+this project solves is: **capture a full high-speed burst on the microcontroller, send it
+as one discrete unit, and keep the desktop side responsive regardless of how fast bursts
+arrive.**
 
-## 2 Review
+Three sub-problems fall out of that:
+1. **Threading** — acquisition (whether from real hardware or the built-in simulator)
+   must not block the GUI's event loop.
+2. **Storage throughput** — persisting a 700-point trace multiple times a second must not
+   bottleneck on database writes.
+3. **Transport reliability** — BLE notifications can be dropped; losing part of a burst
+   silently would corrupt the analysis.
 
-### 2.1 Background & Existing Systems
-Legacy instrumentation software used in similar laboratory settings suffered from several fundamental architectural limitations:
+## 3. Analysis & Design
 
-1. **Continuous Time-Series Bottleneck:** Older software attempted to stream all 250,000 samples per second continuously across USB serial ports. This resulted in severe buffer overflows, dropped packets, serial interface lockups, and unmanageable database sizes.
-2. **Synchronous UI Freeze:** Early Graphical User Interface (GUI) prototypes performed database disk writes and serial socket polling directly on the main UI event thread. This caused the GUI window to freeze or enter an "Unresponsive" state during high-frequency pulse bursts.
-3. **Database Concurrency Lockups:** Previous SQLite implementations opened and closed database connections repeatedly for each incoming sample point. Under high burst rates, this caused `sqlite3.OperationalError: database is locked` crashes due to file lock contention.
-4. **Static Plotting Limitations:** Traditional plotting setups rendered a single continuous line, failing to provide both the detailed microsecond decay curve and the long-term parametric trend across successive pulses simultaneously.
-
-### 2.2 System Objectives
-Version 5.0.0 was engineered to solve these challenges through a modular, decoupled architecture:
-- **Decoupled Architecture:** Clean separation of concern across Data Sources, Protocol Parsing, Persistence Engine, Service Controller, and CustomTkinter Presentation UI.
-- **Thread-Safe Queuing:** Utilization of non-blocking `queue.Queue` message passing to decouple background data acquisition threads from Tkinter's main loop.
-- **On-the-Fly Regression:** Embedded logarithmic linear regression within the Python parser to extract pulse fall times without relying on hardware transmission overhead.
-- **Interactive Visualization:** Balanced 50/50 dual-chart canvas displaying the latest pulse shape alongside a rolling 20-burst fall time trend with interactive point-and-click historical inspection.
-
----
-
-## 3 Analysis and Design
-
-### 3.1 Entity Relationship Diagram
-
-The persistence layer is modeled around a relational schema isolating experimental sessions, individual trace bursts, and system event logs.
+### 3.1 Database schema (SQLite)
 
 ```mermaid
 erDiagram
@@ -120,56 +92,35 @@ erDiagram
     }
 ```
 
-### 3.2 Database Design
+`sessions` holds one row per recording run; `trace_bursts` holds one row per captured
+burst, with the full 700-point trace serialized as a JSON array in `trace_data` (storing
+700 individual rows per burst was considered and rejected — see §4.3). `system_events` is
+a general-purpose log table that exists in the schema but isn't written to by any code
+path yet — reserved for future diagnostics.
 
-The relational database is implemented using SQLite 3 configured with **Write-Ahead Logging (WAL)** (`PRAGMA journal_mode=WAL`) and Foreign Key constraints (`PRAGMA foreign_keys=ON`).
+The database is opened once, in WAL (Write-Ahead Logging) mode, and kept open for the
+life of the app behind a `threading.Lock`, rather than opened and closed per write — this
+avoids the file-lock contention that repeated open/close cycles under a fast write rate
+would otherwise cause.
 
-#### 3.2.1 Sessions Table
-Stores high-level metadata for each acquisition session.
+### 3.2 Software architecture
 
-| Column Name | Data Type | Constraints | Description |
-|---|---|---|---|
-| `session_id` | TEXT | PRIMARY KEY | Unique session identifier (`RUN_YYYYMMDD_HHMMSS`) |
-| `name` | TEXT | NULLABLE | Human-readable session name |
-| `start_time` | TEXT | NOT NULL | ISO-8601 timestamp of session creation |
-| `end_time` | TEXT | NULLABLE | ISO-8601 timestamp of session termination |
-| `burst_count` | INTEGER | DEFAULT 0 | Total number of bursts recorded in session |
-| `status` | TEXT | DEFAULT 'running' | Session state (`running`, `completed`) |
-| `source_type` | TEXT | NULLABLE | Ingestion source (`simulator`, `serial`, `ble`) |
-| `notes` | TEXT | NULLABLE | Optional user annotations |
+The codebase is split into three layers with a strict dependency direction —
+`gui/` depends on `core/`, `core/` depends on `models/`, and nothing depends back on `gui/`:
 
-#### 3.2.2 Trace Bursts Table
-Stores pulse decay burst events and computed signal parameters.
+- **`models/`** — plain data (`TracePoint`, `TraceBurst`).
+- **`core/`** — all non-visual logic: data sources, protocol parsing, the fall-time
+  regression, the acquisition service, the database, CSV logging.
+- **`gui/`** — the CustomTkinter/Matplotlib presentation layer.
 
-| Column Name | Data Type | Constraints | Description |
-|---|---|---|---|
-| `burst_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Unique record ID |
-| `session_id` | TEXT | FOREIGN KEY (sessions) | Session reference |
-| `burst_index` | INTEGER | NOT NULL | Sequential burst index within session |
-| `timestamp` | TEXT | NOT NULL | ISO-8601 sample capture timestamp |
-| `peak_voltage` | REAL | NULLABLE | Maximum recorded voltage (V) |
-| `fall_time_us` | REAL | NULLABLE | Calculated 10%–90% fall time ($\mu\text{s}$) |
-| `avg_fall_time_us`| REAL | NULLABLE | 10-run rolling average fall time ($\mu\text{s}$) |
-| `channel` | INTEGER | DEFAULT 0 | Hardware channel index |
-| `trace_data` | TEXT | NOT NULL | Compact JSON string `[[idx, time, volt], ...]` |
+A `DataSource` abstract base class lets three interchangeable sources — `SimulatorSource`,
+`SerialSource`, `BLESource` — present the same `connect()/start()/stop()/disconnect()`
+interface, so the rest of the app never branches on which one is active. Full details are
+in `ARCHITECTURE.md` and `02_DATA_SOURCES.md`.
 
-#### 3.2.3 System Events Table
-Stores system logs, hardware connection state changes, and diagnostics.
+## 4. Implementation
 
-| Column Name | Data Type | Constraints | Description |
-|---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Event entry ID |
-| `timestamp` | TEXT | NOT NULL | ISO-8601 log timestamp |
-| `event_type` | TEXT | NOT NULL | Event classification (`INFO`, `WARN`, `ERROR`) |
-| `message` | TEXT | NOT NULL | Log detail text |
-
----
-
-## 4 Implementation
-
-### 4.1 Telemetry Data Models & ASCII Framing Parser
-
-The data model is implemented in `models/telemetry.py` using strongly typed Python `@dataclass` structures:
+### 4.1 Data model and the Serial parser
 
 ```python
 @dataclass
@@ -189,40 +140,54 @@ class TraceBurst:
     channel: int = 0
 ```
 
-#### State-Machine Protocol Parser (`core/parser/trace_parser.py`)
-The parser maintains a stream line buffer to handle arbitrary TCP/Serial data chunks. It recognizes ASCII frames delimited by `---BEGIN TRACE DATA---` and `---END TRACE DATA---`. 
+The Serial `TraceParser` buffers incoming text and recognizes frames delimited by
+`<<BEG>>` / `<<END>>`. On a completed frame, it computes the burst's metrics itself (the
+firmware doesn't currently transmit a metrics block over Serial) using the same
+log-linear regression the firmware runs:
 
-Upon detecting frame completion, the parser calculates signal parameters on-the-fly using logarithmic linear regression. Taking the natural logarithm of exponential decay voltage $V(t) = V_0 e^{-\lambda t}$ converts the curve into linear form:
+$$\ln(V) = \ln(V_0) - \frac{1}{\tau}t \qquad\Rightarrow\qquad \text{fall time} = \ln(9)\cdot\tau \approx 2.1972245 \times \left(-\frac{1}{m}\right)$$
 
-$$\ln(V) = \ln(V_0) - \lambda t$$
+where $m$ is the least-squares slope of $\ln(V)$ vs. $t$ over the regression window
+(`truePeakIndex + 40` to `truePeakIndex + 190`, i.e. 151 of the burst's 700 points, chosen
+to skip initial ringing right after the trigger). Full derivation and firmware-side gating
+rules (peak ≥ 1.0 V, drop threshold 50 mV, minimum point count, etc.) are in
+`06_DATA_ACQUISITION_PROCESS.md`.
 
-The slope $m = -\lambda$ is computed via least-squares regression:
+### 4.2 Data sources
 
-$$m = \frac{N \sum (t \cdot \ln V) - \sum t \sum \ln V}{N \sum t^2 - (\sum t)^2}$$
+- **`SimulatorSource`** generates a realistic synthetic 700-sample decay burst about
+  every 250 ms (matching the real hardware's pulse rate), computing its metrics through
+  the *same* regression code path real data uses, so simulated results are never
+  fabricated separately from what's plotted.
+- **`SerialSource`** wraps `pyserial` in a background thread reading at 115200 baud, and
+  degrades gracefully (an `'error'` state, not a crash) if `pyserial` isn't installed.
+- **`BLESource`** wraps `bleak` (Nordic UART Service profile) in a dedicated background
+  thread running its own `asyncio` event loop. Unlike Serial, BLE uses a **binary packet
+  protocol with per-sample retransmission**: each sample is its own 11-byte packet
+  carrying its own index, so a dropped notification can be detected and specifically
+  re-requested (up to 5 retry rounds) rather than corrupting the whole burst silently.
+  This is a deliberate improvement over an earlier text-framed BLE approach, where losing
+  one notification could mean losing an entire burst with no way to know it happened.
 
-The $10\%\rightarrow90\%$ fall time is derived as:
+### 4.3 Persistence
 
-$$\text{Fall Time } (\mu\text{s}) = \ln(9) \cdot \frac{1}{\lambda} \approx 2.1972245 \times \left(-\frac{1}{m}\right)$$
+`DatabaseManager` keeps one persistent, WAL-mode SQLite connection guarded by a lock (see
+§3.1). Rather than one row per sample point (which, at several bursts/second × 700 points,
+would create an unmanageably large table very quickly and slow down every insert), each
+burst's full trace is serialized to a single JSON string and stored in one `trace_data`
+column — one `INSERT` per burst regardless of trace length.
 
-### 4.2 Data Source Abstraction Layer (Simulator, USB Serial, BLE)
+Alongside SQLite, `RollingCSVLogger` writes a lightweight per-burst summary row (peak
+voltage, fall time, rolling average) to a daily CSV file, automatically rotating at
+midnight and pruning files older than 7 days — giving researchers a quick, database-free
+way to open results in Excel or MATLAB.
 
-The application implements a polymorphic hardware abstraction layer inheriting from `DataSource` (`core/sources/base.py`):
+### 4.4 Concurrency
 
-1. **`SimulatorSource` (`core/sources/simulator.py`):** Generates synthetic decay bursts at 4 Hz. It models real hardware behavior by simulating a 700-sample ADC buffer, detecting a random peak index ($10 \le i_{\text{peak}} \le 100$), slicing out 151 points ($i_{\text{peak}}+40 \rightarrow i_{\text{peak}}+190$), and adding Gaussian noise $\mathcal{N}(0, 0.01\text{ V})$.
-2. **`SerialSource` (`core/sources/serial_source.py`):** Wraps `pyserial` inside a non-blocking background thread reading at 115200 baud. It includes a `try...except ImportError` fallback so the app can launch without hardware drivers.
-3. **`BLESource` (`core/sources/ble_source.py`):** Wraps `bleak` for Bluetooth Low Energy UART communications (`Nordic UART Service`). It runs a dedicated `asyncio` event loop inside a background daemon thread.
-
-### 4.3 High-Throughput Persistence Engine (SQLite WAL & CSV Logger)
-
-1. **SQLite Database Manager (`core/database/manager.py`):** Operates a single persistent database connection guarded by `threading.Lock()`. By setting `PRAGMA journal_mode=WAL` and serializing the 151 sample points into a JSON string (`trace_data`), the database achieves zero-lock contention during 10 Hz burst writes.
-2. **Rolling CSV Logger (`core/logging/csv_logger.py`):** Logs metrics (`Timestamp`, `Burst_ID`, `Peak_Voltage_V`, `Fall_Time_us`, `Avg_Fall_Time_us`) to daily rotating files (`telemetry_metrics_YYYYMMDD.csv`). Automatically purges logs older than 7 days.
-3. **Session CSV Exporter:** Provides `export_session_csv()` to export complete raw trace point arrays for external processing in MATLAB or Python pandas.
-
-### 4.4 Acquisition Service & Thread-Safe Concurrency Queue
-
-`AcquisitionService` (`core/services/acquisition.py`) acts as the core pipeline coordinator. It manages session creation, data routing, and source lifecycle.
-
-To prevent thread collision between background ingestion threads and CustomTkinter's single-threaded event loop, all incoming bursts pass through a thread-safe `queue.Queue()`. The GUI polls this queue every 100ms using `self.after(100, self._start_polling)` without blocking UI responsiveness:
+Background threads (Serial reads, BLE notification handlers, the simulator's timer loop)
+never call into Tkinter or Matplotlib directly. Instead, they push completed `TraceBurst`
+objects into a thread-safe `queue.Queue`; the GUI drains it on a **100 ms Tkinter timer**
+(`self.after(...)`), non-blockingly:
 
 ```python
 def poll_queue(self):
@@ -230,111 +195,95 @@ def poll_queue(self):
     while not self._burst_queue.empty():
         try:
             bursts.append(self._burst_queue.get_nowait())
-        except queue.Empty:
+        except Exception:
             break
     return bursts
 ```
 
-### 4.5 CustomTkinter User Interface & Control System
+This decouples acquisition speed entirely from UI refresh rate, and is the mechanism that
+keeps the interface responsive regardless of which data source is active.
 
-The presentation layer (`gui/app.py` & `gui/components/sidebar.py`) is styled using CustomTkinter with a dark aesthetic (`#1A1A1E` background):
-- **Sidebar Panel:** Houses control buttons (`Start Acquisition`, `Stop`, `Clear Buffer`, `Manage Sessions`, `Analytics`, `Export CSV`, `Settings`) formatted with uniform dimensions ($180 \times 36\text{ px}$).
-- **Status Indicator:** Displays dynamic color-coded state labels (`DISCONNECTED` [Red], `CONNECTING` [Yellow], `ACQUIRING` [Green]).
+### 4.5 User interface
 
-### 4.6 Real-Time Visualization Engine & Interactive Drill-Down
+The main window (CustomTkinter, dark theme) is a sidebar of controls next to a dashboard
+page: five metric cards (Peak Voltage, Fall Time, Avg Fall Time, Std Dev, Min/Max Fall),
+one live decay-trace chart (Matplotlib, with the standard pan/zoom/save toolbar), and a
+log console with a small diagnostics panel. A single Start button doubles as Start/Pause/
+Resume; a separate Stop button always fully finalizes the current session. A Session
+Manager dialog lists, searches, renames, deletes, and reloads past sessions; a Settings
+dialog exposes connection, UI, and file-path options; and a separate Analytics window adds
+four tabs — an overview trend, an overlay of recent raw traces, a fall-time histogram, and
+a tabular report with one-click PDF export.
 
-The dashboard view (`gui/dashboard/page.py` & `gui/dashboard/graph_renderer.py`) embeds two Matplotlib canvases via `BaseChart` (`gui/components/chart.py`):
+## 5. Results & Discussion
 
-1. **Decay Trace (Left Chart - 50% width):** Displays the raw voltage curve ($V$ vs Sample Index $0\rightarrow150$) of the active capture.
-2. **Fall Time Trend (Right Chart - 50% width):** Displays a rolling 20-burst trend line tracking sensor fall times over successive pulses.
-3. **Pan/Zoom Preservation:** `GraphRenderer` checks `ax.get_autoscalex_on()` before autoscaling. If a user zooms or pans using Matplotlib toolbar icons, live data updates update the line data without snapping the view back.
-4. **Interactive Drill-Down:** Clicking any data point on the Trend chart fires a `button_press_event` (`_on_trend_click`). The left chart locks onto that historical burst, updating its title to `Decay Trace (Burst #X)`. Clicking **Reset Live View** unlocks the live stream.
+### 5.1 What works, qualitatively
 
----
+- The Serial and BLE paths both reconstruct complete 700-sample bursts and compute fall
+  times consistent with the firmware's own on-device math (they run the identical
+  regression, so this is true by construction rather than something that needed separate
+  verification against the hardware's numbers).
+- The BLE retransmission scheme means a dropped notification costs, at worst, one resend
+  round for the specific missing samples — not the whole burst.
+- The persistent WAL-mode SQLite connection removes the class of "database is locked"
+  failure that repeated connect/disconnect cycles under load would otherwise cause.
+- The queue-based threading model keeps the GUI responsive independent of acquisition
+  rate — the GUI's redraw work only ever happens on its own 100 ms timer, never inline
+  with a background thread's work.
 
-## 5 Results and Discussion
+### 5.2 What would strengthen this section for a formal review
 
-### 5.1 Intermediate Results and Analysis
+The following are worth actually measuring (rather than estimating) before quoting
+numbers to a panel:
+- End-to-end latency from "Arduino captures the 700th sample" to "chart on screen
+  updates," for both Serial and BLE.
+- Memory footprint over a multi-hour continuous run (the 1000-burst in-memory cap on
+  `burst_history` should keep this bounded, but the actual steady-state number hasn't
+  been measured/documented here).
+- BLE packet-loss rate and how often the 5-round resend limit is actually hit in practice
+  under real lab RF conditions, versus over short desk-range tests.
+- A direct comparison against whatever the previous BARC tooling actually measured, if
+  those numbers are available — the version of this report distributed earlier quoted
+  specific comparison figures (FPS, error rates, RAM) that could not be traced to any
+  benchmark run in this project and have been removed rather than repeated unverified.
 
-#### 5.1.1 Simulator Telemetry Module
-The simulator successfully generated synthetic decay pulses at 4 Hz with realistic peak voltage distributions ($1.5\text{ V} \le V_{\text{peak}} \le 3.0\text{ V}$) and Gaussian noise. The parser correctly extracted peak values and exponential fall times without frame dropping.
-
-#### 5.1.2 Serial Ingestion & Parsing Module
-Testing over native USB serial interface demonstrated 100% framing accuracy. Line buffer segmentation prevented partial frame corruptions, and ASCII marker identification (`---BEGIN TRACE DATA---`) enabled instant re-synchronization following serial reconnection.
-
-#### 5.1.3 Storage & Logging Module
-The persistent SQLite connection configured in WAL mode eliminated the `database is locked` exceptions experienced in v4.x. Daily CSV log rotation operated seamlessly, maintaining file sizes under 2 MB per operational day.
-
-### 5.2 Final Results and Analysis
-
-#### 5.2.1 System Accuracy & Execution Latency
-- **Sampling Fidelity:** Hardware ADC sampling at 250 kSPS provided a temporal resolution of $4.0\text{ }\mu\text{s}$ per sample point, enabling sub-microsecond fall time regression accuracy.
-- **UI Render Latency:** Queue polling at 100 ms maintained a steady 60 FPS GUI update rate with under $2\%$ CPU utilization on a standard Linux workstation.
-- **Memory Optimization:** Capping the client-side `burst_history` list at 1000 items stabilized application memory usage at $\approx 85\text{ MB}$ over extended 8-hour operational runs.
-
-### 5.3 Comparison with Existing Applications
-
-#### 5.3.1 Feature Comparison
-
-| Feature / Metric | Legacy BARC Software (v3.8) | Current Dashboard (v5.0.0) |
-|---|---|---|
-| **Architecture** | Monolithic Single Thread | Decoupled Multi-Thread Queue |
-| **Hardware Protocol** | Continuous Unframed Stream | ASCII Event-Burst Protocol |
-| **Ingestion Sources** | USB Serial Only | Simulator, USB Serial, BLE |
-| **Database Engine** | Standard SQLite (Journal) | SQLite WAL Mode + Thread Lock |
-| **Visualization** | Single Plot | 50/50 Dual Interactive Charts |
-| **Historical Drill-Down** | None (Manual SQL Export) | Interactive Trend Point Click |
-| **UI Responsiveness** | Freezes during acquisition | 100% Non-blocking (60 FPS) |
-
-#### 5.3.2 Performance Comparison
-
-| Performance Parameter | Legacy System (v3.8) | Modern Dashboard (v5.0.0) | Improvement |
-|---|---|---|---|
-| **Max Burst Frequency** | 2 Hz | 20 Hz | **10x Increase** |
-| **Database Lock Errors** | $\sim 15\text{ errors/hr}$ | 0 errors | **100% Resolved** |
-| **GUI Frame Rate** | 12 FPS (Laggy) | 60 FPS (Smooth) | **5x Increase** |
-| **RAM Consumption (8hr)** | > 1.8 GB (Memory Leak) | $\approx 85\text{ MB}$ (Stable) | **95% Reduction** |
-
-### 5.4 Summary
-The v5.0.0 architecture successfully transformed a legacy, freeze-prone continuous streaming tool into a robust, laboratory-grade DAQ telemetry suite. The combination of thread-safe message queues, WAL-mode database persistence, and interactive dual-chart visualization completely resolves historical latency and stability bottlenecks.
-
----
-
-## 6 Conclusion & Future Work
+## 6. Conclusion & Future Work
 
 ### 6.1 Conclusion
-The **BARC Photodetector Decay Analyzer Dashboard (v5.0.0)** meets all functional and technical requirements specified for photodetector pulse decay analysis. By shifting from continuous streaming to an Event-Burst data pipeline, the application achieves 250 kSPS sampling resolution during optical pulses while maintaining ultra-low computational overhead on the host computer. The modular software architecture provides a solid foundation for future laboratory instrumentation projects.
 
-### 6.2 Lessons Learned from Project Management
+The dashboard meets its core goal: acquiring 250 kSPS photodetector burst data without
+overwhelming the serial/BLE link or the desktop GUI, computing decay fall-time
+consistently with the firmware's own math, and persisting it for later review. The
+event-burst data model maps directly onto how the hardware actually produces data, and
+the layered `models/core/gui` split keeps the acquisition and analysis logic testable
+independent of the UI (see the `tests/` suite).
 
-#### 6.2.1 Requirement Gathering and Understanding
-Translating raw sensor physics requirements into software architecture revealed the importance of understanding hardware constraints. Recognizing that serial bandwidth could not support continuous 250 kSPS streaming led directly to the Event-Burst design.
+### 6.2 Lessons learned
 
-#### 6.2.2 Time Management
-Adopting an iterative modular development methodology (Data Models $\rightarrow$ Parser $\rightarrow$ Sources $\rightarrow$ Persistence $\rightarrow$ UI) allowed independent verification of each layer using unit tests, preventing complex integration debugging late in the development cycle.
+- **Matching the physical hardware model mattered.** Modeling data as discrete bursts,
+  rather than forcing it into a continuous-stream shape, made the rest of the design
+  (parsing, storage, display) noticeably simpler.
+- **Wireless transport needs its own reliability strategy.** The move from BLE text
+  framing to a binary, per-sample, retransmission-capable protocol was necessary once it
+  became clear a single dropped notification could otherwise silently corrupt a burst.
+- **Keeping the regression math in one place, ported exactly, avoided drift.** Having
+  Python mirror the firmware's exact math (magic constant included) means the dashboard's
+  numbers can be trusted to match what the hardware itself would have computed, without
+  needing to trust a value transmitted over an unreliable link.
 
-#### 6.2.3 Collaboration and Communication
-Working alongside hardware engineers underscored the necessity of establishing clear, documented interface contracts (such as the ASCII framing protocol) early in the development lifecycle.
+### 6.3 Future work
 
-### 6.3 Future Work
-
-#### 6.3.1 Multi-Channel Data Acquisition
-Expanding the underlying `TraceBurst` data structure to support multi-channel photodetector arrays simultaneously (Channel 0 through Channel 3) using color-coded multi-line canvas overlays.
-
-#### 6.3.2 Advanced Analytics and Reporting (FFT Analysis)
-Integrating Fast Fourier Transform (FFT) frequency spectrum analysis into the `AnalyticsWindow` to identify periodic optical noise and AC power line interference ($50\text{ Hz} / 60\text{ Hz}$).
-
-#### 6.3.3 Mobile Application Integration
-Developing a lightweight companion mobile dashboard (Flutter/Android) that connects directly to the Arduino GIGA's BLE UART service for wireless field inspections.
-
-#### 6.3.4 Enhanced Notification and Alert System
-Implementing visual and audible threshold alerts when measured pulse fall times degrade beyond pre-configured quality control boundaries.
-
-#### 6.3.5 Integration with Remote Cloud Services
-Adding an optional background synchronization worker to upload completed experimental sessions to a central lab server when an internet connection becomes available.
-
-#### 6.3.6 Data Security and Encryption
-Implementing AES-256 payload encryption for BLE characteristic transmissions to ensure data integrity in sensitive laboratory environments.
-
-### 6.4 Summary
-The BARC Telemetry Dashboard represents a complete, professional solution for photodetector signal analysis. The system stands ready for deployment in experimental laboratory environments, with a clear engineering roadmap for future enhancements.
+- **Multi-channel support** — `TraceBurst.channel` already exists in the schema but is
+  currently always `0`; extending capture and the UI to multiple simultaneous channels is
+  a natural next step.
+- **Wiring up `core/analysis/signal.py`** — this module already has peak/fall-time/
+  session-statistics helper functions that aren't currently called from anywhere in the
+  GUI; either using them or removing them would tidy up the codebase.
+- **Making the "graph window" and "line thickness" settings actually do something** —
+  they're currently saved to `config_settings.json` from the Settings dialog but not read
+  anywhere in the chart-rendering code.
+- **Frequency-domain analysis (FFT)** in the Analytics window, to spot periodic noise
+  (e.g. mains hum).
+- **Multi-channel array support**, **alerting on out-of-range fall times**, and **secure
+  transport for BLE** are all reasonable directions depending on lab needs, but should be
+  scoped against actual requirements rather than assumed.

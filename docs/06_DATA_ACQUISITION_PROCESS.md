@@ -1,173 +1,150 @@
-# Data Acquisition (DAQ) System Detail
+# 6. Data Acquisition Pipeline — Firmware to Dashboard
 
-This document provides a highly detailed explanation of the end-to-end Data Acquisition (DAQ) pipeline—from raw hardware ADC register configurations on the Arduino GIGA R1 to thread-safe parsing and visualization in the Python dashboard.
+This is the detailed, end-to-end path: how the Arduino GIGA R1 captures a decay pulse,
+how it gets the result to the PC (two different ways), and how the dashboard turns that
+into a `TraceBurst` on screen. Firmware source: `firmware/arduino_firmware_updated.ino`.
 
 ---
 
-## 1. Hardware-Level ADC Configuration & Optimization
+## 1. Hardware capture (on the Arduino)
 
-The system samples decay events using an **Arduino GIGA R1** running an STM32H7 microcontroller.
+- **Board**: Arduino GIGA R1 (STM32H7).
+- **Sensor input**: pin `A0`, read via the `Arduino_AdvancedAnalog` library (`adc0`).
+- **Sample rate**: 250,000 samples/second (250 kSPS) → **4.0 µs per sample**.
+- **Resolution**: 16-bit (`AN_RESOLUTION_16`), so each raw sample is `0`–`65535`, converted
+  to volts as `rawADC * 3.3 / 65535`.
+- **DMA buffering**: 16 buffers of 16 samples each, so the CPU doesn't drop samples during
+  the burst.
+- A one-time register tweak (`optimizeADCSamplingTime()`) shortens the ADC's per-channel
+  sampling time to 64.5 clock cycles, so it can keep up with 250 kSPS cleanly.
 
-### ADC Resolution & Buffer Settings
-In `setup()`, the ADC is configured using the `Arduino_AdvancedAnalog` library:
-- **Pin**: `A0` (mapped to `adc0`)
-- **Resolution**: `AN_RESOLUTION_16` (16-bit resolution, yielding integer values from `0` to `65535`)
-- **Sampling Rate**: `250,000 Hz` (250 kSPS), corresponding to exactly `4.0 µs` per sample.
-- **DMA Buffers**: Configured with 16 buffers, each storing 16 samples (`N_SAMPLES = 16`, `N_BUFFERS = 16`). This DMA queue prevents the CPU from dropping samples during high-speed acquisition.
+### Triggering
 
-### Sampling Time Register Optimization
-The ADC's default sampling time is too slow to support a clean 250 kSPS rate without signal distortion. To resolve this, `optimizeADCSamplingTime()` modifies the STM32 hardware registers directly:
-```c
-ADC1->SMPR2 &= ~(0x7UL << 15); // Clear bits for Channel 15
-ADC1->SMPR2 |= (0x4UL << 15);  // Set sampling time to 64.5 ADC clock cycles
+An LED (pin 3) blinks on/off every 250 ms as part of the automated "keep pulsing" loop.
+The moment the LED goes **LOW** (light cut off), the firmware:
+1. Flushes any stale samples sitting in the ADC's buffer.
+2. Sets `isTriggered = true` and resets the sample counter.
+3. Starts filling `capturedVoltages[]` from the next available ADC buffer.
+
+Capture always collects exactly **700 samples** (`TARGET_SAMPLES`) — a fixed 2.8 ms
+window — before `captureDone` is set and the burst moves to the analysis stage.
+
+## 2. On-board analysis (also mirrored in Python)
+
+Once 700 samples are in hand, the firmware:
+
+1. **Finds the peak / trigger point** — scans for the first place the voltage drops by
+   at least 50 mV between consecutive samples (`dropThreshold = 0.050`). That index is
+   `truePeakIndex`. If nothing crosses the threshold, it defaults to index 0.
+2. **Gate check** — the voltage at `truePeakIndex` must be at least **1.0 V**, or the
+   whole burst is treated as noise and rejected (`ERROR_BOUNDS_EXCEEDED`).
+3. **Picks the regression window**: from `truePeakIndex + 40` to `truePeakIndex + 190`
+   (151 samples, skipping the first 40 to avoid circuit ringing right after the trigger).
+   That window must fit inside the 700-sample burst, or it's rejected.
+4. **Log-linear regression** — for an exponential decay `V(t) = V₀·e^(−t/τ)`, taking the
+   log of both sides gives a straight line: `ln(V) = −t/τ + ln(V₀)`. The firmware fits a
+   least-squares line to `(t, ln V)` over the regression window (only points where
+   `V > 0.05 V`, to avoid `ln(0)`), requiring more than 10 usable points and a
+   non-degenerate, negative slope.
+5. **Fall time** — defined as the 90%→10% decay time. For an exponential curve that's
+   `ln(9) × τ`, i.e.:
+
+   ```
+   fall_time_us = 2.1972245 × (−1 / slope)
+   ```
+6. **Rolling average** — the last 10 successful fall times are kept in a small array and
+   averaged (`storedBatchAvg10`), refreshed every 10 valid captures.
+
+**This exact math is reimplemented in Python**, in `core/analysis/fall_time.py`
+(`FallTimeCalculator`) — same thresholds, same offsets, same magic constant
+(`2.1972245`), same error names (`ERROR_BOUNDS_EXCEEDED`, `ERROR_NOT_ENOUGH_POINTS`,
+`ERROR_DENOMINATOR_ZERO`, `ERROR_SLOPE_POSITIVE`). This means the dashboard's BLE path
+(and the simulator) compute fall time independently from the raw voltages rather than
+trusting a number sent by the firmware, and will get the same answer the firmware would.
+
+## 3. Getting the data to the PC — two transports
+
+The Arduino has a touchscreen mode selector with three states: **Local Only** (nothing
+sent to a PC — the decay curve and metrics are drawn directly on the Arduino's own
+display), **Remote USB**, and **Remote BLE**. Only the latter two matter for the
+dashboard.
+
+### 3.1 USB Serial — text framing
+
+At 115200 baud, the firmware prints the whole 700-sample burst as plain CSV text:
+
 ```
-This forces the ADC channel to settle faster, ensuring precise voltage readings at high speeds.
-
----
-
-## 2. Triggering & Decay Capture Logic
-
-The system utilizes an automated, non-blocking pulsing engine to trigger decay events:
-
-```
-         ┌── 250ms Blink Window ──┐
-LED Pin: ───┐                     ┌───
-            │                     │
-            └── Decay Event Window ──
-Trigger:    ↑ (Falling edge)
-            Stale ADC buffers cleared,
-            Capture begins.
-```
-
-1. **LED Pulsing (Pin 3)**:
-   - A non-blocking timer toggles the LED state every `250 ms`.
-   - When the LED turns **HIGH**, the photodiode receives maximum light (excitation).
-   - When the LED falls **LOW**, the light is cut off, initiating the exponential decay.
-
-2. **Trigger Window Activation**:
-   - The moment the LED pin transitions to `LOW`, `isTriggered` is set to `true`, and `totalSamplesCollected` resets to `0`.
-   - Before capturing points, the DMA queue is cleared by reading and releasing all existing stale buffers:
-     ```c
-     while (adc0.available()) {
-       SampleBuffer staleBuf = adc0.read();
-       staleBuf.release();
-     }
-     ```
-
-3. **Data Collection**:
-   - The main loop reads new DMA buffers.
-   - For every 16-bit ADC sample, the raw integer value is converted to a physical voltage:
-     $$V = \frac{\text{rawADC} \times 3.3\,\text{V}}{65535}$$
-   - Voltages are saved into the `capturedVoltages` array until exactly `700` samples are collected (representing a `2.8 ms` capture window). At that point, `captureDone` is set to `true`.
-
----
-
-## 3. Onboard Regression & Validation
-
-Once `700` samples are captured, the Arduino validates the transient waveform and runs a log-linear regression to determine the fall time.
-
-### Peak Detection & Validation Gating
-To isolate the start of the decay:
-1. The firmware scans the array looking for a voltage drop threshold of `50 mV` between successive samples:
-   $$V_i - V_{i+1} \ge 0.050\,\text{V}$$
-2. The index where this condition is first met is labeled `truePeakIndex`. If no drop is found, it defaults to `0`.
-3. **Gating Check**: To prevent noise from triggering calculations on flat/empty signals, the peak start voltage must be at least `1.0 V`:
-   $$V_{\text{peak}} \ge 1.0\,\text{V}$$
-   If this threshold isn't met, the capture cycle is rejected, and the variables reset.
-
-### Log-Linear Regression Mathematics
-To calculate the decay constant $\tau$ without performing expensive non-linear fits, the system linearizes the exponential equation:
-$$V(t) = V_0 e^{-t/\tau}$$
-Taking the natural logarithm of both sides:
-$$\ln(V) = -\frac{1}{\tau}t + \ln(V_0)$$
-This matches the linear equation $y = mt + c$, where:
-- $y = \ln(V)$
-- $x = t$ (time in microseconds, starting at $0$ at `regStartIdx`)
-- $m = -\frac{1}{\tau}$ (slope)
-
-**Data Window**:
-- **Start**: `truePeakIndex + 40` (skips initial circuit stabilization/ringing)
-- **End**: `truePeakIndex + 190`
-- **Total Points ($n$)**: Up to 151 points, ignoring any point where $V \le 0.05\,\text{V}$ (to avoid log of zero/noise floor).
-
-**Regression Calculations**:
-The firmware calculates the cumulative variables:
-$$\sum x, \quad \sum y, \quad \sum xy, \quad \sum x^2$$
-The slope ($m$) is computed via the least-squares formula:
-$$m = \frac{n\sum xy - \sum x \sum y}{n\sum x^2 - (\sum x)^2}$$
-
-### Fall-Time Calculation
-The fall time ($t_{\text{fall}}$) is defined as the time it takes for the voltage to decay from 90% to 10% of its peak.
-For an exponential decay:
-$$t_{\text{fall}} = \ln(9) \times \tau \approx 2.1972245 \times \left(-\frac{1}{m}\right)$$
-
----
-
-## 4. Multi-Route Telemetry Protocol
-
-Depending on the routing mode selected on the GIGA touch screen, data is packaged and sent using distinct protocols:
-
-### ROUTE A: Native USB Serial
-Data is printed as ASCII strings to the serial port at `115200` baud:
-```text
 <<BEG>>
 Sample_Index,Time_us,Voltage_V
-40,0.0,2.1523
-41,4.0,2.0234
+0,0.0,2.3120
+1,4.0,2.3050
 ...
+699,2796.0,0.0842
 <<END>>
 ```
 
-### ROUTE B: BLE (Bluetooth Low Energy) UART
-To fit within the **20-byte BLE Characteristic MTU limit** without truncation, the data is structured as follows:
-1. **Sentinels**: Written directly as single-packet notification updates:
-   - `<<BEG>>\n` (8 bytes)
-   - `Index,Time,Volt\n` (16 bytes)
-2. **Numeric Data Points**: Formatted into strings (e.g., `"140,400.0,1.2543\n"`), and then manually chunked into 20-byte packets using a loop:
-   ```c
-   int bytesSent = 0;
-   while (bytesSent < msgLength) {
-     int chunkSize = min(20, msgLength - bytesSent);
-     txCharacteristic.writeValue((uint8_t*)&bleTxBuffer[bytesSent], chunkSize);
-     bytesSent += chunkSize;
-     delayMicroseconds(500);
-   }
-   ```
-3. **Closing Sentinel**: Written as `<<END>>\n` (8 bytes).
+This is simple and, over a wired USB CDC connection, reliable enough that the dashboard
+doesn't need any retry logic — `TraceParser` (see `01_MODELS_AND_PARSER.md`) just buffers
+incoming lines and reassembles frames.
 
----
+### 3.2 BLE — binary packets with retransmission
 
-## 5. Python-Side Parsing & Queue Management
+BLE is different: it's wireless, notification payloads are capped at 20 bytes, and
+individual notifications can be silently dropped. Sending 700 samples as one long text
+stream over BLE would risk losing an unrecoverable chunk of a burst. Instead, the
+firmware and dashboard use the Nordic UART Service profile with a small custom binary
+protocol:
 
-The desktop dashboard handles incoming telemetry using a dedicated parsing state machine.
+**GATT profile**
+| | UUID | Type |
+|---|---|---|
+| Service | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | — |
+| TX characteristic (Arduino → PC) | `6E400003-...` | Notify |
+| RX characteristic (PC → Arduino) | `6E400002-...` | Write |
 
-```
-       [ Raw Text Stream ]
-               │
-               ▼
-       [ Split on '\n' ]
-               │
-   ┌───────────┴───────────┐
-   ▼                       ▼
-<<BEG>>                 <<END>>
-State ──► 'in_frame'    State ──► 'idle'
-Clear buffers           Calculate local fallback metrics;
-                        Emit completed TraceBurst
-```
+**Packets, Arduino → PC (over TX, Notify):**
 
-1. **Stream Buffering (`TraceParser.feed`)**:
-   - Incoming chunks from the serial interface or BLE characteristic are appended to `_line_buffer`.
-   - The buffer is split on `\n`. The last fragment (if it doesn't end with a newline) is saved back to `_line_buffer` to await the next packet.
+| Packet | Size | Layout |
+|---|---|---|
+| SAMPLE | 11 bytes | `[type=0x00][index: u16][time_us: f32][voltage: f32]` |
+| END | 3 bytes | `[type=0x01][total_count: u16]` |
 
-2. **State Machine Transitions**:
-   - **`<<BEG>>`**: Sets state to `in_frame` and clears point buffers.
-   - **CSV Data (`idx,time,volt`)**: If state is `in_frame`, the line is split by `,`. The strings are converted into floats and appended as a `TracePoint`. If a line contains header text, it throws a `ValueError` during parsing and is safely skipped.
-   - **`<<END>>`**: Sets state to `idle`. It packages the collected list of `TracePoint`s into a `TraceBurst` object, performs regression calculation fallbacks if hardware metrics are missing, and returns the completed burst.
+The firmware sends one SAMPLE packet per sample (700 of them), then one END packet.
 
-3. **Acquisition Dispatching**:
-   - Completed `TraceBurst` instances are pushed to a thread-safe `queue.Queue`.
-   - The dashboard GUI polls this queue every `100 ms` via a Tkinter `.after()` callback.
-   - For every pulled burst, the system:
-     1. Writes the trace metadata and points to the SQLite database (using WAL journal mode).
-     2. Appends summary records to the daily csv log file.
-     3. Notifies the Matplotlib rendering thread to redraw the decay trace and trend line graphs.
+**Commands, PC → Arduino (over RX, Write):**
+
+| Command | Byte(s) | Meaning |
+|---|---|---|
+| `0x01` | START | Begin capturing/streaming |
+| `0x02` | STOP | Stop |
+| `0x03` | RESEND | `[0x03][count][idx0_lo][idx0_hi]...` — resend up to 8 specific sample indices |
+| `0x04` | BURST_ACK | Host confirms it has the complete burst — safe to resume auto-capture |
+
+**Loss recovery (Selective Repeat ARQ)** — on the Python side, `BLEBurstAssembler`
+(`core/parser/ble_binary_parser.py`) tracks exactly which sample indices it has received.
+When the END packet arrives:
+
+1. If every index 0–699 was received, the burst is complete — done.
+2. If some are missing, `BLESource` sends one or more RESEND commands listing just those
+   indices (chunked at 8 indices per 20-byte packet), waits ~0.4 s, and checks again.
+3. This can repeat up to **5 rounds**. If the burst is still incomplete after 5 rounds,
+   it's discarded — with a log line reporting exactly how many/which samples were lost —
+   rather than silently storing corrupted data.
+4. Either way, the dashboard sends a BURST_ACK once it's done with the burst, so the
+   Arduino's auto-capture loop (which otherwise pauses, `awaitingBurstAck`, so it doesn't
+   overwrite `capturedVoltages[]` mid-retransmission) can resume. There's also a 3-second
+   failsafe timeout on the Arduino side in case the host never ACKs at all.
+
+This is a meaningfully more robust design than a plain text stream over BLE: a single
+dropped notification used to mean losing the *entire* burst; now it means, at worst, one
+resend round for a handful of samples.
+
+## 4. Python-side reconstruction
+
+- **Serial path**: `SerialSource` → `TraceParser.feed()` → `TraceBurst`, with fall time
+  computed inline inside the parser (see `01_MODELS_AND_PARSER.md`).
+- **BLE path**: `BLESource` → `BLEBurstAssembler` (gap detection + resend) →
+  `FallTimeCalculator.compute()` (same regression as the firmware) → `TraceBurst`.
+
+Either way, the result lands in the shared `burst_queue`, and from there follows the same
+path described in `ARCHITECTURE.md` §4 and `04_CONCURRENCY_AND_SERVICES.md`.
