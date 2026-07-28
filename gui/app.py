@@ -1,7 +1,7 @@
 import customtkinter as ctk
 from datetime import datetime
 
-from config import AppConfig, WINDOW_TITLE, GEOMETRY_SIZE, MIN_GEOMETRY_SIZE
+from config import AppConfig, WINDOW_TITLE, MIN_GEOMETRY_SIZE
 from core.database.manager import DatabaseManager
 from core.logging import RollingCSVLogger, export_session_csv
 from core.services.acquisition import AcquisitionService
@@ -30,7 +30,9 @@ class TelemetryDashboard(ctk.CTk):
             
         # Window setup
         self.title(WINDOW_TITLE)
-        self.geometry(GEOMETRY_SIZE)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        self.geometry(f"{screen_width}x{screen_height}+0+0")
         self.minsize(*MIN_GEOMETRY_SIZE)
         
         # Grid layout (1x2) - Sidebar and Main Content

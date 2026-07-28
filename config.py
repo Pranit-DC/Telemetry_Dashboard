@@ -2,7 +2,7 @@ import os
 import json
 
 WINDOW_TITLE = "Photodetector Decay Analyzer Dashboard"
-GEOMETRY_SIZE = "1400x870"
+# GEOMETRY_SIZE = "1400x870"
 MIN_GEOMETRY_SIZE = (1200, 780)
 CONFIG_FILE = "config_settings.json"
 

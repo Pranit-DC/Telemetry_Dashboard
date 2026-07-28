@@ -12,9 +12,11 @@ class AnalyticsWindow(ctk.CTkToplevel):
     def __init__(self, db, burst_history):
         super().__init__()
         self.title("Data Analytics & Post-Processing")
-        self.geometry("1000x700")
-        self.minsize(800, 600)
-        
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        self.geometry(f"{screen_width}x{screen_height}+0+0")
+        self.minsize(1200, 780)
+
         self.db = db
         self.burst_history = burst_history
         
