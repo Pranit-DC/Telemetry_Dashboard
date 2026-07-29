@@ -60,7 +60,7 @@ class AppConfig:
         
     @property
     def ui_scale(self) -> float:
-        return self._data.get('ui_scale', 2.4)
+        return self._data.get('ui_scale', 1.0)
     
     def update(self, **kwargs):
         self._data.update(kwargs)

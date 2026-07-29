@@ -75,6 +75,7 @@ CDC or as binary packets over BLE (Nordic UART Service) — see
 ## Testing
 
 ```bash
+pip install --no-index --find-links . pytest==9.1.1
 pytest tests/ -v                        # pure logic — no hardware needed
 pytest tests/hardware --port COM7 -v    # real GIGA — plug in, flash firmware, then run
 ```

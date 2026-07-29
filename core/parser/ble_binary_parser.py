@@ -118,6 +118,17 @@ def build_start_command() -> bytes:
 def build_stop_command() -> bytes:
     return bytes([0x02])
 
+def build_set_local_mode_command() -> bytes:
+    return bytes([0x05])
+
+
+def build_set_usb_mode_command() -> bytes:
+    return bytes([0x06])
+
+
+def build_set_ble_mode_command() -> bytes:
+    return bytes([0x07])
+
 
 def build_burst_ack_command() -> bytes:
     return bytes([0x04])

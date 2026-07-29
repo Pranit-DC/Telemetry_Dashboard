@@ -16,6 +16,9 @@ from core.parser.ble_binary_parser import (
     build_stop_command,
     build_burst_ack_command,
     build_resend_commands,
+    build_set_local_mode_command,
+    build_set_usb_mode_command,
+    build_set_ble_mode_command,
 )
 
 # Wait this long after sending a RESEND round before re-checking completeness.
@@ -93,8 +96,6 @@ class BLESource(DataSource):
             self._set_state('error')
             print(f"BLE connect error: {e}")
 
-    # ------------------------------------------------------------ start/stop
-
     def start(self) -> None:
         if self._state == 'connected' and self._loop:
             self.assembler.start_new_burst()
@@ -103,13 +104,24 @@ class BLESource(DataSource):
 
     async def _start_async(self):
         try:
-            await self._client.start_notify(self.TX_CHAR_UUID, self._notification_handler)
-            # response=True -> BLE Write Request, ACKed at the link layer.
-            # This is what makes command delivery reliable without any extra
-            # app-level retry logic for START/STOP/RESEND/ACK themselves.
-            await self._client.write_gatt_char(self.RX_CHAR_UUID, build_start_command(), response=True)
+            await self._client.start_notify(
+                self.TX_CHAR_UUID,
+                self._notification_handler
+            )
+            # Tell firmware to switch to BLE mode
+            await self._client.write_gatt_char(
+                self.RX_CHAR_UUID,
+                build_set_ble_mode_command(),
+                response=True
+            )
+            # Start acquisition
+            await self._client.write_gatt_char(
+                self.RX_CHAR_UUID,
+                build_start_command(),
+                response=True
+            )
         except Exception as e:
-            self._set_state('error')
+            self._set_state("error")
             print(f"BLE start error: {e}")
 
     def stop(self) -> None:

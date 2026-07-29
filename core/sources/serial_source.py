@@ -30,11 +30,26 @@ class SerialSource(DataSource):
             print(f"Serial connect error: {e}")
             
     def start(self) -> None:
+
         if self._state == 'connected' and self._serial:
-            self.send_command('START')
+
+            # Tell firmware to switch to USB route
+            self.send_command("MODE USB")
+
+            # Give the Arduino a short moment to process it
+            import time
+            time.sleep(0.05)
+
+            # Start acquisition
+            self.send_command("START")
+
             self._running = True
-            self._set_state('acquiring')
-            self._thread = threading.Thread(target=self._read_loop, daemon=True)
+            self._set_state("acquiring")
+
+            self._thread = threading.Thread(
+                target=self._read_loop,
+                daemon=True
+            )
             self._thread.start()
             
     def stop(self) -> None:
@@ -53,7 +68,8 @@ class SerialSource(DataSource):
     def send_command(self, command: str) -> None:
         if self._serial and self._serial.is_open:
             try:
-                self._serial.write(f"{command}\n".encode('utf-8'))
+                self._serial.write((command + "\n").encode("utf-8"))
+                self._serial.flush()
             except Exception as e:
                 print(f"Serial send error: {e}")
                 

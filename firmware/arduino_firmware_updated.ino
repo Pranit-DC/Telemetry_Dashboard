@@ -74,15 +74,31 @@ struct EndPacket {
 };
 #pragma pack(pop)
 
-// ===== Command protocol (Python -> Arduino over rxCharacteristic) =====
-// 0x01 = START
-// 0x02 = STOP
-// 0x03 = RESEND  [1]=count N (<=8)  [2..]=N * u16 LE sample indices
-// 0x04 = BURST_ACK (host confirms it has the complete burst; safe to resume auto-capture)
-#define CMD_START 0x01
-#define CMD_STOP 0x02
-#define CMD_RESEND 0x03
-#define CMD_BURST_ACK 0x04
+// ================= COMMAND PROTOCOL =================
+//
+// BLE:
+// 0x01 START
+// 0x02 STOP
+// 0x03 RESEND
+// 0x04 BURST ACK
+// 0x05 SET LOCAL MODE
+// 0x06 SET USB MODE
+// 0x07 SET BLE MODE
+//
+// Serial:
+// START
+// STOP
+// MODE LOCAL
+// MODE USB
+// MODE BLE
+//
+#define CMD_START          0x01
+#define CMD_STOP           0x02
+#define CMD_RESEND         0x03
+#define CMD_BURST_ACK      0x04
+#define CMD_SET_LOCAL_MODE 0x05
+#define CMD_SET_USB_MODE   0x06
+#define CMD_SET_BLE_MODE   0x07
 
 // Gate that pauses the automated re-trigger engine while a burst is in flight
 // over BLE and might still need retransmission from capturedVoltages[].
@@ -325,6 +341,42 @@ void activateSystem(bool newState) {
   }
 }
 
+// Handle incoming Serial commands from PC dashboard
+void handleSerialCommands() {
+  if (!Serial.available())
+    return;
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  if (cmd.equalsIgnoreCase("START")) {
+    if (!systemActive)
+      activateSystem(true);
+    return;
+  }
+  if (cmd.equalsIgnoreCase("STOP")) {
+    if (systemActive)
+      activateSystem(false);
+    return;
+  }
+  if (cmd.equalsIgnoreCase("MODE LOCAL")) {
+    currentRoute = ROUTE_LOCAL_ONLY;
+    clearLowerPanelStateContext();
+    drawTxModeButton();
+    return;
+  }
+  if (cmd.equalsIgnoreCase("MODE USB")) {
+    currentRoute = ROUTE_REMOTE_USB;
+    clearLowerPanelStateContext();
+    drawTxModeButton();
+    return;
+  }
+  if (cmd.equalsIgnoreCase("MODE BLE")) {
+    currentRoute = ROUTE_REMOTE_BLE;
+    clearLowerPanelStateContext();
+    drawTxModeButton();
+    return;
+  }
+}
+
 // ===== Send one sample as an 11-byte binary packet over BLE Notify =====
 void sendSamplePacketBLE(int index) {
   SamplePacket pkt;
@@ -346,11 +398,34 @@ void handleIncomingCommand() {
 
   uint8_t cmd = buf[0];
 
+  // START acquisition
   if (cmd == CMD_START) {
-    if (!systemActive) activateSystem(true);
-
-  } else if (cmd == CMD_STOP) {
-    if (systemActive) activateSystem(false);
+      if (!systemActive)
+          activateSystem(true);
+  }
+  // STOP acquisition
+  else if (cmd == CMD_STOP) {
+      if (systemActive)
+          activateSystem(false);
+  }
+  // Switch to LOCAL mode
+  else if (cmd == CMD_SET_LOCAL_MODE) {
+      currentRoute = ROUTE_LOCAL_ONLY;
+      clearLowerPanelStateContext();
+      drawTxModeButton();
+  }
+  // Switch to USB mode
+  else if (cmd == CMD_SET_USB_MODE) {
+      currentRoute = ROUTE_REMOTE_USB;
+      clearLowerPanelStateContext();
+      drawTxModeButton();
+  }
+  // Switch to BLE mode
+  else if (cmd == CMD_SET_BLE_MODE) {
+      currentRoute = ROUTE_REMOTE_BLE;
+      clearLowerPanelStateContext();
+      drawTxModeButton();
+  }
 
   } else if (cmd == CMD_BURST_ACK) {
     awaitingBurstAck = false;
@@ -433,6 +508,7 @@ void setup() {
 }
 
 void loop() {
+  handleSerialCommands();
   unsigned long currentMillis = millis();
 
   // BLE central connection status poll (unchanged)
