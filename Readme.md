@@ -1,7 +1,7 @@
-#  Telemetry Dashboard
+# Telemetry Dashboard
 
-A Python desktop application for receiving, visualizing, and analyzing high-speed
-telemetry from an Arduino-based photodetector acquisition system.
+> A Python desktop application for receiving, visualizing, and analyzing high-speed
+> telemetry from an Arduino-based photodetector acquisition system.
 
 ## Project Overview
 
@@ -13,16 +13,20 @@ Data can come from USB Serial, Bluetooth Low Energy (BLE), or a built-in Simulat
 
 ## Features
 
-- **Modern GUI** — dark-themed, built with `customtkinter`.
-- **Live decay-trace chart** — full-width `matplotlib` plot of the most recent 700-sample
-  capture, with pan/zoom/save toolbar.
-- **Three interchangeable data sources** — Simulator, USB Serial, BLE (with per-sample
-  loss detection and retransmission over BLE).
-- **Persistence** — SQLite (`telemetry.db`, WAL mode) plus daily rolling CSV summaries.
-- **Session management** — browse, search, rename, delete, and reload past recording
-  runs.
-- **Analytics window** — peak-voltage trend, recent-trace overlay, fall-time histogram,
-  and one-click PDF report export.
+- **Modern GUI**
+  — dark-themed, built with `customtkinter`.
+- **Live decay-trace chart**
+  — full-width `matplotlib` plot of the most recent 700-sample capture, with pan/zoom/save
+  toolbar.
+- **Three interchangeable data sources**
+  — Simulator, USB Serial, BLE (with per-sample loss detection and retransmission over BLE).
+- **Persistence**
+  — SQLite (`telemetry.db`, WAL mode) plus daily rolling CSV summaries.
+- **Session management**
+  — browse, search, rename, delete, and reload past recording runs.
+- **Analytics window**
+  — peak-voltage trend, recent-trace overlay, fall-time histogram, and one-click PDF report
+  export.
 
 ## Installation & Setup
 
@@ -47,14 +51,17 @@ Starts on the Simulator source by default, so it's usable without any hardware a
 
 The codebase separates the UI layer from core business logic:
 
-- **`gui/`** — the main window, dashboard layout, dialogs (Settings, Session Manager),
-  and the Analytics window.
-- **`core/`** — data sources (Simulator/Serial/BLE), protocol parsing, the fall-time
-  regression, the acquisition service, database, and CSV logging.
-- **`models/`** — the `TraceBurst`/`TracePoint` data classes used to move data through
-  the app.
+- **`gui/`**
+  — the main window, dashboard layout, dialogs (Settings, Session Manager), and the Analytics
+  window.
+- **`core/`**
+  — data sources (Simulator/Serial/BLE), protocol parsing, the fall-time regression, the
+  acquisition service, database, and CSV logging.
+- **`models/`**
+  — the `TraceBurst`/`TracePoint` data classes used to move data through the app.
 
 For full details, see `docs/`:
+
 - [System Architecture](docs/ARCHITECTURE.md)
 - [Data Acquisition Pipeline & Wire Protocols](docs/06_DATA_ACQUISITION_PROCESS.md)
 - [Execution & Data Workflow](docs/WORKFLOW.md)
@@ -74,6 +81,6 @@ CDC or as binary packets over BLE (Nordic UART Service) — see
 
 ```bash
 pip install --no-index --find-links . pytest==9.1.1
-pytest tests/ -v                        # pure logic — no hardware needed
-pytest tests/hardware --port COM7 -v    # real GIGA — plug in, flash firmware, then run
+pytest tests/ -v                       # pure logic — no hardware needed
+pytest tests/hardware --port COM7 -v   # real GIGA — plug in, flash firmware, then run
 ```
