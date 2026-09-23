@@ -1,4 +1,4 @@
-# System Architecture — BARC Telemetry Dashboard
+# System Architecture —  Telemetry Dashboard
 
 **Version described here:** the current codebase (sidebar shows `v5.0.0`), as of July 2026.
 

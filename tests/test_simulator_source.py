@@ -5,7 +5,7 @@ from core.sources.simulator import SimulatorSource
 
 class TestSimulatorSource:
     """The simulator needs no hardware and no mocking, so these tests run
-    exactly the same in BARC's offline environment as anywhere else."""
+    exactly the same in 's offline environment as anywhere else."""
 
     def test_source_type_is_simulator(self):
         source = SimulatorSource(Queue())

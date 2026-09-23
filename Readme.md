@@ -1,13 +1,11 @@
-# BARC Telemetry Dashboard
+#  Telemetry Dashboard
 
 A Python desktop application for receiving, visualizing, and analyzing high-speed
 telemetry from an Arduino-based photodetector acquisition system.
 
 ## Project Overview
 
-Built during an internship at the Bhabha Atomic Research Centre (BARC). The goal is a
-clean, modular dashboard for tracking exponential decay transients captured by an
-Arduino GIGA R1 at 250 kSPS.
+The goal is a clean, modular dashboard for tracking exponential decay transients captured by an Arduino GIGA R1.
 
 The application uses a **burst-based** model: each excitation pulse produces one
 700-sample capture (2.8 ms), sent as a discrete unit rather than a continuous stream.

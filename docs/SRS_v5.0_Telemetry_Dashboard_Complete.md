@@ -2,7 +2,7 @@
 # Telemetry Dashboard
 
 **Version described:** current codebase (`v5.0.0`)
-**Project type:** BARC internship/training project
+**Project type:**  internship/training project
 **Platform:** Windows desktop (developed and run offline/air-gapped)
 **Language:** Python 3.x
 

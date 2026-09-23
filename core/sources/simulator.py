@@ -71,7 +71,7 @@ class SimulatorSource(DataSource):
              noise is visibly "smooth-ish" jitter, not sample-to-sample static
         """
         baseline_v = random.uniform(2.15, 2.35)
-        # Calibrated against a real BARC capture (single ground-truth sample,
+        # Calibrated against a real  capture (single ground-truth sample,
         # not a distribution - treat this as a first approximation, refine
         # once more real bursts are available). That sample's regression
         # window (peak+40 to peak+190) decayed from 1.61V to 0.57V over
