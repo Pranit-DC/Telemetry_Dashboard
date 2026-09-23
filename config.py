@@ -77,7 +77,7 @@ class AppConfig:
             'chart_line_thickness': 2,
             'sqlite_database_directory': os.path.abspath(os.getcwd()),
             'system_logs_directory': os.path.abspath(os.path.join(os.getcwd(), 'logs')),
-            'ui_scale': 2.4,
+            'ui_scale': 1.0,
         }
 
 def load_persistent_config() -> dict:

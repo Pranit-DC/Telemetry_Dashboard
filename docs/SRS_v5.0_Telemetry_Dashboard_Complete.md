@@ -6,11 +6,6 @@
 **Platform:** Windows desktop (developed and run offline/air-gapped)
 **Language:** Python 3.x
 
-> This replaces the earlier `SRS_v3.8` draft, which described a simulation-only stage of
-> the project (no BLE, no real hardware integration yet). BLE, USB Serial, and the
-> Arduino firmware integration are all implemented in the current version — this SRS
-> reflects that.
-
 ---
 
 ## 1. Introduction
