@@ -60,15 +60,6 @@ The codebase separates the UI layer from core business logic:
 - **`models/`**
   — the `TraceBurst`/`TracePoint` data classes used to move data through the app.
 
-For full details, see `docs/`:
-
-- [System Architecture](docs/ARCHITECTURE.md)
-- [Data Acquisition Pipeline & Wire Protocols](docs/06_DATA_ACQUISITION_PROCESS.md)
-- [Execution & Data Workflow](docs/WORKFLOW.md)
-- [Design Decisions](docs/DESIGN_DECISIONS.md)
-- [Offline Development Guide](docs/OFFLINE_DEVELOPMENT_GUIDE.md) *(start here for a full
-  documentation map)*
-
 ## Firmware
 
 The matching Arduino GIGA R1 firmware is in `firmware/`. It samples at 250 kSPS using the
