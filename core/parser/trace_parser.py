@@ -87,7 +87,7 @@ class TraceParser:
                         self._reset_burst_state()
                 continue
                 
-            if line == "---METRICS---":
+            if line == "METRICS":
                 self._state = "in_metrics"
                 continue
                 

@@ -22,22 +22,13 @@ from core.parser.ble_binary_parser import (
 )
 
 # Wait this long after sending a RESEND round before re-checking completeness.
-# Generous enough for slow links, short enough not to stall the UI noticeably.
 RESEND_WAIT_SECONDS = 0.4
 
 
 class BLESource(DataSource):
-    """Data source for acquiring telemetry over BLE (Bluetooth Low Energy).
-
-    Uses a binary packet protocol (see core/parser/ble_binary_parser.py) with
-    Selective Repeat ARQ: dropped samples are detected via per-index gaps and
-    re-requested individually, rather than trusting a single lossy stream of
-    text-framed data (the old <<BEG>>/<<END>> approach, which silently lost
-    entire bursts whenever any single notification was dropped).
-
-    Fall-time is computed here in Python from the raw, unprocessed voltages -
-    it never trusts a value from the firmware - using the exact same
-    regression the Arduino runs (see core/analysis/fall_time.py).
+    """Handles telemetry acquisition over Bluetooth Low Energy.    
+    Receives binary packets, requests missing samples, and converts
+    completed bursts into trace data for further processing.
     """
 
     SERVICE_UUID = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
@@ -58,8 +49,7 @@ class BLESource(DataSource):
         self._thread = None
         self._connected_event = threading.Event()
 
-    # ---------------------------------------------------------------- connect
-
+    # CONNECT
     def connect(self) -> None:
         self._set_state('connecting')
         self._thread = threading.Thread(target=self._run_asyncio_loop, daemon=True)
@@ -136,8 +126,7 @@ class BLESource(DataSource):
         except Exception as e:
             print(f"BLE stop error: {e}")
 
-    # ---------------------------------------------------------------- teardown
-
+    # TEARDOWN
     def disconnect(self) -> None:
         if self._loop:
             if self._loop.is_running():
@@ -156,7 +145,8 @@ class BLESource(DataSource):
 
     def send_command(self, command: str) -> None:
         """Kept for compatibility with the GUI's generic command hooks.
-        Prefer start()/stop() for START/STOP - they use the binary protocol."""
+        Prefer start()/stop() for START/STOP - they use the binary protocol.
+        """
         if self._loop and self._client and self._client.is_connected:
             if command == 'START':
                 asyncio.run_coroutine_threadsafe(
@@ -173,14 +163,11 @@ class BLESource(DataSource):
     def source_type(self) -> str:
         return 'ble'
 
-    # ---------------------------------------------------------- packet intake
-
+    # PACKET INTAKE
     def _notification_handler(self, sender, data: bytearray):
         try:
             kind, value = self.assembler.feed(bytes(data))
             if kind == 'end':
-                # Runs on the same event-loop thread bleak calls us from,
-                # so create_task (not run_coroutine_threadsafe) is correct here.
                 self._loop.create_task(self._resolve_burst())
         except Exception as e:
             print(f"BLE notify error: {e}")
@@ -218,7 +205,6 @@ class BLESource(DataSource):
     async def _finalize_burst(self):
         voltages = self.assembler.get_voltages_or_none()
         if voltages is None:
-            # Should not happen (is_complete just checked True), defensive only.
             print("[BLE] finalize_burst called but array is not actually complete - skipping.")
             self.assembler.start_new_burst()
             return

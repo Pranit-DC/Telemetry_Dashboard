@@ -66,7 +66,7 @@ class FallTimeCalculator:
             # caller should not have gotten here without a fully reconstructed array.
             raise ValueError(f"Expected {TARGET_SAMPLES} samples, got {n}")
 
-        # --- find truePeakIndex (same scan as firmware) ---
+        # wnd truePeakIndex (same scan as firmware) 
         true_peak_index = 0
         peak_validated = False
         for i in range(TARGET_SAMPLES - 1):
