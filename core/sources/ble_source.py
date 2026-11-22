@@ -174,7 +174,6 @@ class BLESource(DataSource):
 
     async def _resolve_burst(self):
         """Called once the END marker for a burst has been seen.
-
         Checks for gaps; if any exist, requests exactly those samples be
         resent (Selective Repeat), waits, and re-checks - up to a bounded
         number of rounds so a dead link can't stall acquisition forever.
